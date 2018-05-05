@@ -16,7 +16,7 @@ use ui::App;
 
 fn started(application: &gtk::Application) {
     let app = App::new(application);
-    app.content.window.show_all();
+    app.window.gtk_window.show_all();
 }
 
 fn main() {

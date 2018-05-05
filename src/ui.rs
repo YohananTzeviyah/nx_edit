@@ -7,20 +7,59 @@ use std::sync::{Arc, Mutex};
 
 
 pub struct App {
-    pub state:   Arc<Mutex<AppState>>,
-    pub content: Content,
-    pub toolbar: gtk::Toolbar,
+    pub state:  Arc<Mutex<AppState>>,
+    pub window: Window,
+}
+
+pub struct Window {
+    pub gtk_window: gtk::ApplicationWindow,
+    pub content:    Content,
 }
 
 pub struct Content {
-    pub window: gtk::ApplicationWindow,
+    pub main_box: gtk::Box,
+    pub toolbar:  gtk::Toolbar,
+    pub label:    gtk::Label,
 }
 
 
 impl App {
     pub fn new(application: &gtk::Application) -> Self {
         let state = Arc::new(Mutex::new(AppState::new()));
-        let content = Content::new(application);
+        let window = Window::new(application, &state);
+
+        Self { state, window }
+    }
+}
+
+impl Window {
+    pub fn new(application: &gtk::Application,
+               state:       &Arc<Mutex<AppState>>) -> Self {
+        let gtk_window = gtk::ApplicationWindow::new(application);
+
+        gtk::Window::set_default_icon_name("iconname"); // TODO
+        gtk_window.set_title("nx_edit");
+        gtk_window.set_position(gtk::WindowPosition::Center);
+        gtk_window.set_default_size(800, 600);
+
+        let w = gtk_window.clone();
+        gtk_window.connect_delete_event(move |_, _| {
+            w.destroy();
+            Inhibit(false)
+        });
+
+        let content = Content::new(&gtk_window, state);
+
+        Self { gtk_window, content }
+    }
+}
+
+impl Content {
+    pub fn new(window: &gtk::ApplicationWindow,
+               state:  &Arc<Mutex<AppState>>) -> Self {
+        let main_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
+
+        //
         let toolbar = gtk::Toolbar::new();
 
         // Add buttons to toolbar.
@@ -28,7 +67,7 @@ impl App {
                                                "open file");
         {
             let s = Arc::clone(&state);
-            let w = content.window.clone();
+            let w = window.clone();
             open_button.connect_clicked(move |_| {
                 let mut state = s.lock().unwrap();
                 // TODO: Figure out some kind of error handling, maybe
@@ -46,27 +85,16 @@ impl App {
         toolbar.insert(&about_button, 1);
         // toolbar.insert(...
 
-        content.window.add(&toolbar);
+        main_box.pack_start(&toolbar, true, false, 0);
 
-        Self { state, content, toolbar }
-    }
-}
+        //
+        let label = gtk::Label::new("LOL!");
+        label.set_halign(gtk::Align::Center);
+        main_box.pack_end(&label, true, true, 8);
 
-impl Content {
-    pub fn new(application: &gtk::Application) -> Self {
-        let window = gtk::ApplicationWindow::new(application);
+        window.add(&main_box);
 
-        gtk::Window::set_default_icon_name("iconname"); // TODO
-        window.set_title("nx_edit");
-        window.set_position(gtk::WindowPosition::Center);
-
-        let w = window.clone();
-        window.connect_delete_event(move |_, _| {
-            w.destroy();
-            Inhibit(false)
-        });
-
-        Self { window }
+        Self { main_box, toolbar, label }
     }
 }
 
@@ -93,15 +121,8 @@ fn open_file(window: &gtk::ApplicationWindow)
 
                 if path.extension().and_then(|os| os.to_str()) != Some("nx") {
                     eprintln!("Filename doesn't match \"*.nx\"");
-
-                    let d = gtk::Dialog::new_with_buttons(
-                        Some("wrong file type"),
-                        Some(&file_dialog),
-                        gtk::DialogFlags::from_bits(0b11).unwrap(),
-                        &[("close", 0)]
-                    );
-                    d.run();
-                    d.destroy();
+                    run_msg_dialog(&file_dialog,
+                                   "wrong file type (must be *.nx).");
 
                     return Ok(None);
                 }
@@ -118,4 +139,17 @@ fn open_file(window: &gtk::ApplicationWindow)
     file_dialog.destroy();
 
     res
+}
+
+pub fn run_msg_dialog<W: IsA<gtk::Window>>(parent: &W, msg: &str) {
+    let md = gtk::MessageDialog::new(
+        Some(parent),
+        gtk::DialogFlags::from_bits(0b11).unwrap(),
+        gtk::MessageType::Error,
+        gtk::ButtonsType::Close,
+        msg
+    );
+
+    md.run();
+    md.destroy();
 }
