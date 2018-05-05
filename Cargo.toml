@@ -1,0 +1,23 @@
+[package]
+name = "nx_edit"
+version = "0.0.0"
+authors = ["Emmy Noether <intransigentms@gmail.com>"]
+
+[dependencies]
+gdk-pixbuf = "*"
+gio = "*"
+glib = "*"
+gtk = { version = "*", features = ["v3_22"] }
+nx = "*"
+
+[features]
+default = []
+
+[profile.release]
+lto = true
+panic = "abort"
+opt-level = 3
+debug = false
+debug-assertions = false
+rpath = false
+codegen-units = 1
