@@ -1,3 +1,5 @@
+#![feature(exact_chunks)]
+
 mod err;
 mod state;
 mod ui;
@@ -13,17 +15,16 @@ use gtk::prelude::*;
 use std::env::args;
 use ui::App;
 
-
 fn started(application: &gtk::Application) {
     let app = App::new(application);
     app.window.gtk_window.show_all();
 }
 
 fn main() {
-    let application =
-        gtk::Application::new("net.ims_v2.nx_edit",
-                              gio::ApplicationFlags::empty())
-                         .expect("Could not initialize GTK+ application.");
+    let application = gtk::Application::new(
+        "net.ims_v2.nx_edit",
+        gio::ApplicationFlags::empty(),
+    ).expect("Could not initialize GTK+ application.");
 
     application.connect_startup(move |app| started(app));
     application.connect_activate(|_| {});

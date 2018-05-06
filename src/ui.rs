@@ -5,7 +5,6 @@ use nx;
 use state::*;
 use std::sync::{Arc, Mutex};
 
-
 pub struct App {
     pub state:  Arc<Mutex<AppState>>,
     pub window: Window,
@@ -13,15 +12,20 @@ pub struct App {
 
 pub struct Window {
     pub gtk_window: gtk::ApplicationWindow,
-    pub content:    Content,
+    pub content:    Arc<Mutex<Content>>,
 }
 
 pub struct Content {
-    pub main_box: gtk::Box,
-    pub toolbar:  gtk::Toolbar,
-    pub label:    gtk::Label,
+    pub main_box:  gtk::Box,
+    pub toolbar:   Toolbar,
+    pub tree_view: Option<gtk::TreeView>,
 }
 
+pub struct Toolbar {
+    pub gtk_toolbar:  gtk::Toolbar,
+    pub open_button:  gtk::ToolButton,
+    pub about_button: gtk::ToolButton,
+}
 
 impl App {
     pub fn new(application: &gtk::Application) -> Self {
@@ -33,8 +37,10 @@ impl App {
 }
 
 impl Window {
-    pub fn new(application: &gtk::Application,
-               state:       &Arc<Mutex<AppState>>) -> Self {
+    pub fn new(
+        application: &gtk::Application,
+        state: &Arc<Mutex<AppState>>,
+    ) -> Self {
         let gtk_window = gtk::ApplicationWindow::new(application);
 
         gtk::Window::set_default_icon_name("iconname"); // TODO
@@ -50,63 +56,97 @@ impl Window {
 
         let content = Content::new(&gtk_window, state);
 
-        Self { gtk_window, content }
+        Self {
+            gtk_window,
+            content,
+        }
     }
 }
 
 impl Content {
-    pub fn new(window: &gtk::ApplicationWindow,
-               state:  &Arc<Mutex<AppState>>) -> Self {
+    pub fn new(
+        window: &gtk::ApplicationWindow,
+        state: &Arc<Mutex<AppState>>,
+    ) -> Arc<Mutex<Self>> {
         let main_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
 
         //
-        let toolbar = gtk::Toolbar::new();
-
-        // Add buttons to toolbar.
-        let open_button = gtk::ToolButton::new(&gtk::Label::new("open file"),
-                                               "open file");
-        {
-            let s = Arc::clone(&state);
-            let w = window.clone();
-            open_button.connect_clicked(move |_| {
-                let mut state = s.lock().unwrap();
-                // TODO: Figure out some kind of error handling, maybe
-                // involving storing errors in `AppState`.
-                state.open_files.new_file(open_file(&w).unwrap().unwrap());
-
-                println!("{}",
-                         state.open_files.get_file(0).unwrap().node_count());
-            });
-        }
-        toolbar.insert(&open_button, 0);
-
-        let about_button = gtk::ToolButton::new(&gtk::Label::new("about"), //&gtk::Image::new_from_file("img/about.svg")
-                                                "about");
-        toolbar.insert(&about_button, 1);
-        // toolbar.insert(...
-
-        main_box.pack_start(&toolbar, true, false, 0);
-
-        //
-        let label = gtk::Label::new("LOL!");
-        label.set_halign(gtk::Align::Center);
-        main_box.pack_end(&label, true, true, 8);
+        let toolbar = Toolbar::new();
+        main_box.pack_start(&toolbar.gtk_toolbar, true, false, 0);
 
         window.add(&main_box);
 
-        Self { main_box, toolbar, label }
+        let ret = Arc::new(Mutex::new(Self {
+            main_box,
+            toolbar,
+            tree_view: None,
+        }));
+
+        {
+            let s = Arc::clone(&state);
+            let w = window.clone();
+            let c = Arc::clone(&ret);
+            ret.lock()
+                .unwrap()
+                .toolbar
+                .open_button
+                .connect_clicked(move |_| {
+                    let mut state = s.lock().unwrap();
+                    // TODO: Figure out some kind of error
+                    // handling, maybe
+                    // involving storing errors in `AppState`.
+                    state
+                        .open_files
+                        .new_file(open_file(&w).unwrap().unwrap(), &c);
+
+                    println!(
+                        "{}",
+                        state
+                            .open_files
+                            .get_file(0)
+                            .unwrap()
+                            .node_count()
+                    );
+                });
+        }
+
+        ret
     }
 }
 
-fn open_file(window: &gtk::ApplicationWindow)
-    -> Result<Option<nx::File>, Error>
-{
+impl Toolbar {
+    pub fn new() -> Self {
+        let gtk_toolbar = gtk::Toolbar::new();
+
+        // Add buttons to toolbar.
+        let open_button =
+            gtk::ToolButton::new(&gtk::Label::new("open file"), "open file");
+        gtk_toolbar.insert(&open_button, 0);
+
+        let about_button = gtk::ToolButton::new(&gtk::Label::new("about"), //&gtk::Image::new_from_file("img/about.svg")
+                                                "about");
+        gtk_toolbar.insert(&about_button, 1);
+        // toolbar.insert(...
+
+        Self {
+            gtk_toolbar,
+            open_button,
+            about_button,
+        }
+    }
+}
+
+fn open_file(
+    window: &gtk::ApplicationWindow,
+) -> Result<Option<nx::File>, Error> {
     let file_dialog = gtk::FileChooserDialog::with_buttons(
         Some("select an *.nx file to view/edit"),
         Some(window),
         gtk::FileChooserAction::Open,
-        &[("open",   gtk::ResponseType::Accept),
-          ("cancel", gtk::ResponseType::Cancel)]
+        &[
+            ("open", gtk::ResponseType::Accept),
+            ("cancel", gtk::ResponseType::Cancel),
+        ],
     );
     let file_filter = gtk::FileFilter::new();
     file_filter.add_pattern("*.nx");
@@ -117,21 +157,22 @@ fn open_file(window: &gtk::ApplicationWindow)
         gtk::ResponseType::Accept =>
             if let Some(file) = file_dialog.get_file() {
                 let path = &file.get_path()
-                                .ok_or(Error::Gio("`gio::File` has no path"))?;
+                    .ok_or(Error::Gio("`gio::File` has no path"))?;
 
-                if path.extension().and_then(|os| os.to_str()) != Some("nx") {
+                if path.extension().and_then(|os| os.to_str()) == Some("nx") {
+                    Ok(unsafe { nx::File::open(path).map(|nf| Some(nf))? })
+                } else {
                     eprintln!("Filename doesn't match \"*.nx\"");
-                    run_msg_dialog(&file_dialog,
-                                   "wrong file type (must be *.nx).");
+                    run_msg_dialog(
+                        &file_dialog,
+                        "wrong file type (must be *.nx).",
+                    );
 
-                    return Ok(None);
+                    Ok(None)
                 }
-
-                Ok(unsafe { nx::File::open(path).map(|nf| Some(nf))? })
             } else {
                 Ok(None)
             },
-                                       // No need to destroy the file dialog.
         gtk::ResponseType::DeleteEvent => return Ok(None),
         _ => Ok(None),
     };
@@ -147,7 +188,7 @@ pub fn run_msg_dialog<W: IsA<gtk::Window>>(parent: &W, msg: &str) {
         gtk::DialogFlags::from_bits(0b11).unwrap(),
         gtk::MessageType::Error,
         gtk::ButtonsType::Close,
-        msg
+        msg,
     );
 
     md.run();

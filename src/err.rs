@@ -1,13 +1,11 @@
 use nx;
 use std::{self, fmt};
 
-
 #[derive(Debug)]
 pub enum Error<'a> {
     Gio(&'a str),
     Nx(nx::Error),
 }
-
 
 impl<'a> fmt::Display for Error<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
