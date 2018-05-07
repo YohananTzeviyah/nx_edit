@@ -2,7 +2,6 @@ use gdk_pixbuf::{Colorspace, Pixbuf};
 use gtk::{
     self,
     prelude::*,
-    BoxExt,
     CellLayoutExt,
     TreeStoreExtManual,
     TreeViewExt,
@@ -10,7 +9,7 @@ use gtk::{
 };
 use nx::{self, GenericNode};
 use std::sync::{Arc, Mutex, MutexGuard};
-use ui::Content;
+use ui::{Content, TreeView};
 
 pub struct AppState {
     pub open_files: OpenFiles,
@@ -66,8 +65,11 @@ impl OpenFiles {
 
         let tree_view = gtk::TreeView::new_with_model(&tree_store);
         tree_view.set_halign(gtk::Align::Center);
+        tree_view.set_valign(gtk::Align::Start);
+        tree_view.set_property_expand(true);
         tree_view.set_headers_visible(true);
         tree_view.set_enable_tree_lines(true);
+        tree_view.set_vscroll_policy(gtk::ScrollablePolicy::Natural);
         append_text_column(&tree_view, 0);
         append_text_column(&tree_view, 1);
 
@@ -130,10 +132,43 @@ impl OpenFiles {
             });
         }
 
+        tree_view.connect_test_collapse_row(move |tv, titer, _| {
+            let model_store: gtk::TreeStore = tv.get_model()
+                .clone()
+                .expect("gtk::TreeView expected to have a gtk::TreeModel")
+                .downcast()
+                .expect("Failed to downcast gtk::TreeModel => gtk::TreeStore");
+
+            let immed_child_tree_iter =
+                if let Some(ti) = model_store.iter_children(titer) {
+                    ti
+                } else {
+                    // No children at all, nothing to deallocate.
+                    return Inhibit(false);
+                };
+
+            // Actual modifications happen here.
+            if let Some(sndry_child_tree_iter) =
+                model_store.iter_children(&immed_child_tree_iter)
+            {
+                while model_store.remove(&sndry_child_tree_iter) {}
+            }
+            while model_store.iter_next(&immed_child_tree_iter) {
+                if let Some(sndry_child_tree_iter) =
+                    model_store.iter_children(&immed_child_tree_iter)
+                {
+                    while model_store.remove(&sndry_child_tree_iter) {}
+                }
+            }
+
+            Inhibit(false)
+        });
+
         let mut c = content.lock().unwrap();
-        c.main_box.pack_end(&tree_view, true, true, 8);
-        tree_view.show_all();
-        c.tree_view = Some(tree_view);
+
+        let tree_view_struct = TreeView::new(&c.main_box, tree_view);
+        tree_view_struct.scroll_win.show_all();
+        c.tree_view = Some(tree_view_struct);
     }
 
     pub fn get_file(&self, index: usize) -> Option<MutexGuard<nx::File>> {
@@ -151,12 +186,8 @@ pub fn nx_onto_tree_store(
     let node_name = node.name();
 
     match node.dtype() {
-        nx::Type::Empty => store.insert_with_values(
-            parent,
-            None,
-            &[0, 1],
-            &[&node_name, &"[empty]"],
-        ),
+        nx::Type::Empty =>
+            store.insert_with_values(parent, None, &[0, 1], &[&node_name, &""]),
         nx::Type::Integer => store.insert_with_values(
             parent,
             None,
@@ -193,8 +224,10 @@ pub fn nx_onto_tree_store(
             vec.exact_chunks_mut(4)
                 .for_each(|bgra| bgra.swap(0, 2));
 
-            let (width, height) =
-                (bitmap.width() as i32, bitmap.height() as i32);
+            let (width, height) = (
+                i32::from(bitmap.width()),
+                i32::from(bitmap.height()),
+            );
             let pixbuf = Pixbuf::new_from_vec(
                 vec,
                 Colorspace::Rgb,
@@ -236,7 +269,7 @@ pub fn append_text_column(tree: &gtk::TreeView, col_ix: i32) {
 
 pub fn get_node_from_indices<'a>(
     root: nx::Node<'a>,
-    indices: &Vec<i32>,
+    indices: &[i32],
 ) -> Option<nx::Node<'a>> {
     if indices[0] != 0 {
         return None;

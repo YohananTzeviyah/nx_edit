@@ -18,13 +18,18 @@ pub struct Window {
 pub struct Content {
     pub main_box:  gtk::Box,
     pub toolbar:   Toolbar,
-    pub tree_view: Option<gtk::TreeView>,
+    pub tree_view: Option<TreeView>,
 }
 
 pub struct Toolbar {
     pub gtk_toolbar:  gtk::Toolbar,
     pub open_button:  gtk::ToolButton,
     pub about_button: gtk::ToolButton,
+}
+
+pub struct TreeView {
+    pub scroll_win:    gtk::ScrolledWindow,
+    pub gtk_tree_view: gtk::TreeView,
 }
 
 impl App {
@@ -92,8 +97,7 @@ impl Content {
                 .open_button
                 .connect_clicked(move |_| {
                     let mut state = s.lock().unwrap();
-                    // TODO: Figure out some kind of error
-                    // handling, maybe
+                    // TODO: Figure out some kind of error handling, maybe
                     // involving storing errors in `AppState`.
                     state
                         .open_files
@@ -117,6 +121,8 @@ impl Content {
 impl Toolbar {
     pub fn new() -> Self {
         let gtk_toolbar = gtk::Toolbar::new();
+        gtk_toolbar.set_vexpand(false);
+        gtk_toolbar.set_vexpand_set(true);
 
         // Add buttons to toolbar.
         let open_button =
@@ -132,6 +138,22 @@ impl Toolbar {
             gtk_toolbar,
             open_button,
             about_button,
+        }
+    }
+}
+
+impl TreeView {
+    pub fn new(main_box: &gtk::Box, gtk_tree_view: gtk::TreeView) -> Self {
+        let scroll_win = gtk::ScrolledWindow::new(None, None);
+        scroll_win.set_property_expand(true);
+
+        scroll_win.add(&gtk_tree_view);
+
+        main_box.pack_start(&scroll_win, true, true, 8);
+
+        Self {
+            scroll_win,
+            gtk_tree_view,
         }
     }
 }
@@ -160,10 +182,10 @@ fn open_file(
                     .ok_or(Error::Gio("`gio::File` has no path"))?;
 
                 if path.extension().and_then(|os| os.to_str()) == Some("nx") {
-                    Ok(unsafe { nx::File::open(path).map(|nf| Some(nf))? })
+                    Ok(unsafe { nx::File::open(path).map(Some)? })
                 } else {
                     eprintln!("Filename doesn't match \"*.nx\"");
-                    run_msg_dialog(
+                    run_err_msg_dialog(
                         &file_dialog,
                         "wrong file type (must be *.nx).",
                     );
@@ -182,7 +204,7 @@ fn open_file(
     res
 }
 
-pub fn run_msg_dialog<W: IsA<gtk::Window>>(parent: &W, msg: &str) {
+pub fn run_err_msg_dialog<W: IsA<gtk::Window>>(parent: &W, msg: &str) {
     let md = gtk::MessageDialog::new(
         Some(parent),
         gtk::DialogFlags::from_bits(0b11).unwrap(),
