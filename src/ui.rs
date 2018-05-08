@@ -31,15 +31,24 @@ pub struct Toolbar {
 }
 
 pub enum NodeDisplay {
-    Nothing(gtk::Label),
+    Empty(gtk::Label),
     Text(gtk::ScrolledWindow, gtk::TextView),
     Image(gtk::Image),
     Audio(u8), // TODO
 }
 
 pub struct NodeView {
-    pub main_box:     gtk::Box,
+    pub own_box:      gtk::Box,
     pub node_display: NodeDisplay,
+    pub assoc_path:   Option<Vec<i32>>,
+    pub buttons:      NodeViewButtons,
+}
+
+pub struct NodeViewButtons {
+    pub own_box:       gtk::Box,
+    pub record_button: gtk::Button,
+    pub undo_button:   gtk::Button,
+    pub redo_button:   gtk::Button,
 }
 
 pub struct TreeView {
@@ -205,20 +214,40 @@ impl Toolbar {
 
 impl NodeView {
     pub fn new_empty(main_box: &gtk::Box) -> Self {
+        let own_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        own_box.set_homogeneous(false);
+
         let node_display = {
             let blank_label = gtk::Label::new("");
             //noexpand(&blank_label);
-            main_box.pack_start(&blank_label, true, true, 0);
-            NodeDisplay::Nothing(blank_label)
+            own_box.pack_start(&blank_label, true, true, 0);
+            NodeDisplay::Empty(blank_label)
         };
 
+        let buttons = NodeViewButtons::new();
+        own_box.pack_end(&buttons.own_box, false, false, 0);
+
+        main_box.pack_start(&own_box, true, true, 0);
+
         Self {
-            main_box: main_box.clone(),
+            own_box,
             node_display,
+            assoc_path: None,
+            buttons,
         }
     }
 
-    pub fn set_text(&mut self, text: &str) {
+    pub fn set_empty(&mut self) {
+        self.destroy();
+
+        let blank_label = gtk::Label::new("");
+        self.own_box.pack_start(&blank_label, true, true, 0);
+
+        self.node_display = NodeDisplay::Empty(blank_label);
+        self.assoc_path = None;
+    }
+
+    pub fn set_text(&mut self, text: &str, path: Vec<i32>) {
         self.destroy();
 
         let scroll_win = gtk::ScrolledWindow::new(None, None);
@@ -231,37 +260,56 @@ impl NodeView {
         };
         config_text_view(&text_view);
         scroll_win.add(&text_view);
-        self.main_box.pack_start(&scroll_win, true, true, 0);
+        self.own_box.pack_start(&scroll_win, true, true, 0);
 
         self.node_display = NodeDisplay::Text(scroll_win, text_view);
+        self.assoc_path = Some(path);
     }
 
-    pub fn set_img(&mut self, img: gtk::Image) {
+    pub fn set_img(&mut self, img: gtk::Image, path: Vec<i32>) {
         self.destroy();
 
         //noexpand(&img);
-        self.main_box.pack_start(&img, true, true, 0);
+        self.own_box.pack_start(&img, true, true, 0);
 
         self.node_display = NodeDisplay::Image(img);
+        self.assoc_path = Some(path);
     }
 
     pub fn show(&self) {
-        match self.node_display {
-            NodeDisplay::Nothing(ref n) => n.show_all(),
-            NodeDisplay::Text(ref sw, _) => sw.show_all(),
-            NodeDisplay::Image(ref i) => i.show_all(),
-            NodeDisplay::Audio(_) =>
-                unimplemented!("TODO: NodeDisplay::Audio"),
-        }
+        self.own_box.show_all();
     }
 
     fn destroy(&mut self) {
         match self.node_display {
-            NodeDisplay::Nothing(ref n) => n.destroy(),
+            NodeDisplay::Empty(ref n) => n.destroy(),
             NodeDisplay::Text(ref sw, _) => sw.destroy(),
             NodeDisplay::Image(ref i) => i.destroy(),
             NodeDisplay::Audio(_) =>
                 unimplemented!("TODO: NodeDisplay::Audio"),
+        }
+    }
+}
+
+impl NodeViewButtons {
+    pub fn new() -> Self {
+        let own_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        own_box.set_homogeneous(true);
+
+        let record_button = gtk::Button::new_with_label("record");
+        own_box.pack_start(&record_button, true, true, 0);
+
+        let undo_button = gtk::Button::new_with_label("undo");
+        own_box.pack_start(&undo_button, true, true, 0);
+
+        let redo_button = gtk::Button::new_with_label("redo");
+        own_box.pack_start(&redo_button, true, true, 0);
+
+        Self {
+            own_box,
+            record_button,
+            undo_button,
+            redo_button,
         }
     }
 }
@@ -410,15 +458,11 @@ pub fn get_wrap_width(window_width: u32) -> i32 {
         } else {
             (window_width / 4)
         }
+    } else if window_width < 1900 {
+        (window_width / 3)
+    } else if window_width < 3000 {
+        (window_width * 3 / 8)
     } else {
-        if window_width < 1900 {
-            (window_width / 3)
-        } else {
-            if window_width < 3000 {
-                (window_width * 3 / 8)
-            } else {
-                (window_width / 2)
-            }
-        }
+        (window_width / 2)
     } as i32)
 }

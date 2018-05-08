@@ -183,9 +183,12 @@ impl OpenFiles {
                     let mut c = c.lock().unwrap();
                     if let Some(ref mut nv) = c.node_view {
                         if let Some(text) = val1.get::<&str>() {
-                            nv.set_text(text);
+                            nv.set_text(text, path.get_indices());
                         } else if let Some(pixbuf) = val2.get::<Pixbuf>() {
-                            nv.set_img(gtk::Image::new_from_pixbuf(&pixbuf));
+                            nv.set_img(
+                                gtk::Image::new_from_pixbuf(&pixbuf),
+                                path.get_indices(),
+                            );
                         } else {
                             return;
                         }
