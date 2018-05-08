@@ -24,8 +24,9 @@ pub struct Content {
 
 pub struct Toolbar {
     pub container:    gtk::HeaderBar,
-    pub open_button:  gtk::ToolButton,
-    pub about_button: gtk::ToolButton,
+    pub open_button:  gtk::Button,
+    pub close_button: gtk::Button,
+    pub about_button: gtk::Button,
 }
 
 pub struct TreeView {
@@ -157,18 +158,25 @@ impl Toolbar {
         container.set_show_close_button(true);
 
         // Add buttons to toolbar.
-        let open_button =
-            gtk::ToolButton::new(&gtk::Label::new("open file"), "open file");
+        let open_button = gtk::Button::new_with_label("open file");
+        open_button
+            .get_style_context()
+            .map(|c| c.add_class("suggested-action"));
         container.pack_start(&open_button);
 
-        let about_button =
-            gtk::ToolButton::new(&gtk::Label::new("about"), "about");
-        container.pack_start(&about_button);
-        // container.pack_start(...
+        let close_button = gtk::Button::new_with_label("close file");
+        close_button
+            .get_style_context()
+            .map(|c| c.add_class("destructive-action"));
+        container.pack_start(&close_button);
+
+        let about_button = gtk::Button::new_with_label("about");
+        container.pack_end(&about_button);
 
         Self {
             container,
             open_button,
+            close_button,
             about_button,
         }
     }
@@ -211,7 +219,7 @@ fn open_file(
         gtk::ResponseType::Accept =>
             if let Some(file) = file_dialog.get_file() {
                 let path = &file.get_path().ok_or_else(|| {
-                    Error::Gio("`gio::File` has no path".to_owned())
+                    Error::Gio("gio::File has no path".to_owned())
                 })?;
 
                 if path.extension().and_then(|os| os.to_str()) == Some("nx") {
