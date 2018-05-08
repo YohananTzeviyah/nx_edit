@@ -1,4 +1,6 @@
 #![feature(exact_chunks)]
+#![feature(integer_atomics)]
+#![feature(nll)]
 
 mod err;
 mod state;

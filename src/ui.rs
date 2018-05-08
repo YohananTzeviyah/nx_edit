@@ -90,6 +90,7 @@ impl Window {
             let c = Arc::clone(&content);
             toolbar.open_button.connect_clicked(move |_| {
                 let mut state = s.lock().unwrap();
+                let window_width = state.window_width;
                 // TODO: Figure out some kind of error handling, maybe
                 // involving storing errors in `AppState`.
                 let nx_file = if let Some(nf) = open_file(&w).unwrap() {
@@ -97,7 +98,7 @@ impl Window {
                 } else {
                     return;
                 };
-                state.open_files.new_file(nx_file, &c);
+                state.open_files.new_file(nx_file, &c, window_width);
 
                 println!(
                     "{}",
@@ -117,8 +118,21 @@ impl Window {
         // Hooking up window resize events here.
         {
             let c = Arc::clone(&content);
+            let s = Arc::clone(&state);
             gtk_window.connect_configure_event(move |_, event| {
+                let mut s = s.lock().unwrap();
+
                 let (new_width, _) = event.get_size();
+                if s.window_width == new_width {
+                    return false;
+                }
+                s.window_width = new_width;
+
+                let wrap_width = get_wrap_width(new_width);
+                //println!(
+                //    "new_width: {}, wrap_width: {}",
+                //    new_width, wrap_width
+                //);
 
                 if let Some(tv) = c.lock().unwrap().tree_view.as_ref() {
                     tv.gtk_tree_view.get_columns().iter().for_each(|col| {
@@ -126,9 +140,7 @@ impl Window {
                             .iter()
                             .filter_map(|cell| cell.clone().downcast().ok())
                             .for_each(|cell: gtk::CellRendererText| {
-                                cell.set_property_wrap_width(
-                                    (new_width / 3 - 64) as i32,
-                                );
+                                cell.set_property_wrap_width(wrap_width);
                             });
                     });
                 }
@@ -195,7 +207,7 @@ impl NodeView {
     pub fn new_empty(main_box: &gtk::Box) -> Self {
         let node_display = {
             let blank_label = gtk::Label::new("");
-            noexpand(&blank_label);
+            //noexpand(&blank_label);
             main_box.pack_start(&blank_label, true, true, 0);
             NodeDisplay::Nothing(blank_label)
         };
@@ -210,7 +222,7 @@ impl NodeView {
         self.destroy();
 
         let scroll_win = gtk::ScrolledWindow::new(None, None);
-        noexpand(&scroll_win);
+        //noexpand(&scroll_win);
 
         let text_view = {
             let buf = gtk::TextBuffer::new(None);
@@ -227,7 +239,7 @@ impl NodeView {
     pub fn set_img(&mut self, img: gtk::Image) {
         self.destroy();
 
-        noexpand(&img);
+        //noexpand(&img);
         self.main_box.pack_start(&img, true, true, 0);
 
         self.node_display = NodeDisplay::Image(img);
@@ -257,7 +269,7 @@ impl NodeView {
 impl TreeView {
     pub fn new(main_box: &gtk::Box, gtk_tree_view: gtk::TreeView) -> Self {
         let scroll_win = gtk::ScrolledWindow::new(None, None);
-        expand(&scroll_win);
+        //expand(&scroll_win);
 
         scroll_win.add(&gtk_tree_view);
 
@@ -363,6 +375,7 @@ pub fn run_about_dialog<
     Ok(())
 }
 
+/*
 pub fn noexpand<W: gtk::WidgetExt>(w: &W) {
     w.set_property_expand(false);
     w.set_hexpand(false);
@@ -378,6 +391,7 @@ pub fn expand<W: gtk::WidgetExt>(w: &W) {
     w.set_vexpand(true);
     w.set_vexpand_set(true);
 }
+*/
 
 pub fn config_text_view(t: &gtk::TextView) {
     t.set_wrap_mode(gtk::WrapMode::Word);
@@ -387,4 +401,24 @@ pub fn config_text_view(t: &gtk::TextView) {
     t.set_input_purpose(gtk::InputPurpose::FreeForm);
     t.set_justification(gtk::Justification::Left);
     t.set_monospace(true);
+}
+
+pub fn get_wrap_width(window_width: u32) -> i32 {
+    (if window_width < 1300 {
+        if window_width < 900 {
+            (window_width / 5)
+        } else {
+            (window_width / 4)
+        }
+    } else {
+        if window_width < 1900 {
+            (window_width / 3)
+        } else {
+            if window_width < 3000 {
+                (window_width * 3 / 8)
+            } else {
+                (window_width / 2)
+            }
+        }
+    } as i32)
 }

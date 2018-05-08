@@ -10,10 +10,11 @@ use gtk::{
 use nx::{self, GenericNode};
 use pango::{EllipsizeMode, WrapMode};
 use std::sync::{Arc, Mutex, MutexGuard};
-use ui::{Content, NodeView, TreeView};
+use ui::{get_wrap_width, Content, NodeView, TreeView};
 
 pub struct AppState {
-    pub open_files: OpenFiles,
+    pub open_files:   OpenFiles,
+    pub window_width: u32,
 }
 
 pub struct OpenFiles {
@@ -23,7 +24,8 @@ pub struct OpenFiles {
 impl AppState {
     pub fn new() -> Self {
         Self {
-            open_files: OpenFiles::new(),
+            open_files:   OpenFiles::new(),
+            window_width: 0,
         }
     }
 }
@@ -35,7 +37,12 @@ impl OpenFiles {
         }
     }
 
-    pub fn new_file(&mut self, nf: nx::File, content: &Arc<Mutex<Content>>) {
+    pub fn new_file(
+        &mut self,
+        nf: nx::File,
+        content: &Arc<Mutex<Content>>,
+        window_width: u32,
+    ) {
         self.files.push(Arc::new(Mutex::new(nf)));
         let nf = &self.files[self.files.len() - 1];
 
@@ -61,8 +68,8 @@ impl OpenFiles {
         tree_view.set_enable_tree_lines(true);
         tree_view.set_vscroll_policy(gtk::ScrollablePolicy::Natural);
 
-        append_text_column(&tree_view, 0);
-        append_text_column(&tree_view, 1);
+        append_text_column(&tree_view, 0, window_width);
+        append_text_column(&tree_view, 1, window_width);
         append_pixbuf_column(&tree_view, 2);
 
         {
@@ -289,13 +296,17 @@ pub fn nx_onto_tree_store(
     }
 }
 
-pub fn append_text_column(tree: &gtk::TreeView, col_ix: i32) {
+pub fn append_text_column(
+    tree: &gtk::TreeView,
+    col_ix: i32,
+    window_width: u32,
+) {
     let column = gtk::TreeViewColumn::new();
     let cell = gtk::CellRendererText::new();
 
     cell.set_property_ellipsize(EllipsizeMode::None);
     cell.set_property_wrap_mode(WrapMode::Word);
-    cell.set_property_wrap_width(256);
+    cell.set_property_wrap_width(get_wrap_width(window_width));
 
     column.pack_start(&cell, true);
     column.add_attribute(&cell, "text", col_ix);

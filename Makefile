@@ -1,7 +1,7 @@
 .PHONY: clippy debug release native windows_native
 
 debug:
-	cargo clippy
+	cargo clippy && cargo build
 
 release:
 	cargo build --release && strip ./target/release/nx_edit
