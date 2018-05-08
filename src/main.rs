@@ -10,14 +10,17 @@ extern crate glib;
 extern crate gtk;
 extern crate nx;
 
+use err::Error;
 use gio::prelude::*;
 use gtk::prelude::*;
 use std::env::args;
 use ui::App;
 
-fn started(application: &gtk::Application) {
-    let app = App::new(application);
+fn started(application: &gtk::Application) -> Result<(), Error> {
+    let app = App::new(application)?;
     app.window.gtk_window.show_all();
+
+    Ok(())
 }
 
 fn main() {
@@ -26,7 +29,11 @@ fn main() {
         gio::ApplicationFlags::empty(),
     ).expect("Could not initialize GTK+ application.");
 
-    application.connect_startup(move |app| started(app));
+    application.connect_startup(move |app| {
+        if let Err(e) = started(app) {
+            eprintln!("{}", e);
+        }
+    });
     application.connect_activate(|_| {});
 
     application.run(&args().collect::<Vec<_>>());

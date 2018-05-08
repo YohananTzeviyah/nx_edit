@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   xmlns:dc="http://purl.org/dc/elements/1.1/"
+   xmlns:cc="http://creativecommons.org/ns#"
+   xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+   xmlns:svg="http://www.w3.org/2000/svg"
+   xmlns="http://www.w3.org/2000/svg"
+   id="svg8"
+   version="1.1"
+   viewBox="0 0 67.733332 67.733335"
+   height="256"
+   width="256">
+  <defs
+     id="defs2" />
+  <metadata
+     id="metadata5">
+    <rdf:RDF>
+      <cc:Work
+         rdf:about="">
+        <dc:format>image/svg+xml</dc:format>
+        <dc:type
+           rdf:resource="http://purl.org/dc/dcmitype/StillImage" />
+        <dc:title></dc:title>
+      </cc:Work>
+    </rdf:RDF>
+  </metadata>
+  <g
+     transform="translate(0,-229.26665)"
+     id="layer1">
+    <text
+       id="text3715"
+       y="295.81433"
+       x="0.16021129"
+       style="font-style:normal;font-weight:normal;font-size:26.60049057px;line-height:1.25;font-family:sans-serif;letter-spacing:0px;word-spacing:0px;fill:#b7a6c1;fill-opacity:1;stroke:none;stroke-width:0.13854422"
+       xml:space="preserve"><tspan
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:94.57952118px;font-family:'Liberation Sans';-inkscape-font-specification:'Liberation Sans';fill:#b7a6c1;fill-opacity:1;stroke-width:0.13854422"
+         y="295.81433"
+         x="0.16021129"
+         id="tspan3713">N</tspan></text>
+    <rect
+       transform="matrix(-0.84649684,-0.53239375,-0.53239375,0.84649684,0,0)"
+       style="fill:#b7a6c1;fill-opacity:1;stroke-width:0.13854422"
+       y="187.89018"
+       x="-173.44772"
+       height="33.728142"
+       width="7.6972933"
+       id="rect3719" />
+  </g>
+</svg>

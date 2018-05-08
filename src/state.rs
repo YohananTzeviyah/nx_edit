@@ -70,6 +70,7 @@ impl OpenFiles {
         tree_view.set_headers_visible(true);
         tree_view.set_enable_tree_lines(true);
         tree_view.set_vscroll_policy(gtk::ScrollablePolicy::Natural);
+
         append_text_column(&tree_view, 0);
         append_text_column(&tree_view, 1);
 
@@ -105,14 +106,6 @@ impl OpenFiles {
                     get_node_from_indices(f.root(), &expanded_path)
                         .expect("Bad row expansion");
 
-                // Unset model while modifying it, then reconnect after
-                // modifications are made, to speed it up. TODO: Test if this
-                // actually presents a speedup. UPDATE: Jk lol you can't do it
-                // like this unless you like segfaults. :))))))) Gotta figure
-                // out how to tell GTK that I want to hold an outstanding
-                // reference to the model even after "unsetting" it.
-                // tv.set_model::<_, Option<&gtk::TreeModel>>(None);
-
                 // Actual modifications happen here.
                 for immed_child_node in expanded_node.iter() {
                     for sndry_child_node in immed_child_node.iter() {
@@ -125,8 +118,6 @@ impl OpenFiles {
 
                     model_store.iter_next(&immed_child_tree_iter);
                 }
-
-                // tv.set_model(&model_store);
 
                 Inhibit(false)
             });

@@ -1,4 +1,5 @@
 use err::Error;
+use gdk_pixbuf::Pixbuf;
 use gio::FileExt;
 use gtk::{self, prelude::*};
 use nx;
@@ -12,17 +13,17 @@ pub struct App {
 
 pub struct Window {
     pub gtk_window: gtk::ApplicationWindow,
+    pub toolbar:    Toolbar,
     pub content:    Arc<Mutex<Content>>,
 }
 
 pub struct Content {
     pub main_box:  gtk::Box,
-    pub toolbar:   Toolbar,
     pub tree_view: Option<TreeView>,
 }
 
 pub struct Toolbar {
-    pub gtk_toolbar:  gtk::Toolbar,
+    pub container:    gtk::HeaderBar,
     pub open_button:  gtk::ToolButton,
     pub about_button: gtk::ToolButton,
 }
@@ -33,11 +34,11 @@ pub struct TreeView {
 }
 
 impl App {
-    pub fn new(application: &gtk::Application) -> Self {
+    pub fn new(application: &gtk::Application) -> Result<Self, Error> {
         let state = Arc::new(Mutex::new(AppState::new()));
-        let window = Window::new(application, &state);
+        let window = Window::new(application, &state)?;
 
-        Self { state, window }
+        Ok(Self { state, window })
     }
 }
 
@@ -45,97 +46,102 @@ impl Window {
     pub fn new(
         application: &gtk::Application,
         state: &Arc<Mutex<AppState>>,
-    ) -> Self {
+    ) -> Result<Self, Error> {
         let gtk_window = gtk::ApplicationWindow::new(application);
 
-        gtk::Window::set_default_icon_name("iconname"); // TODO
+        gtk::Window::set_default_icon(&Pixbuf::new_from_file(
+            "img/nx_edit.svg",
+        )?);
         gtk_window.set_title("nx_edit");
         gtk_window.set_position(gtk::WindowPosition::Center);
         gtk_window.set_default_size(800, 600);
 
-        let w = gtk_window.clone();
-        gtk_window.connect_delete_event(move |_, _| {
-            w.destroy();
-            Inhibit(false)
-        });
-
-        let content = Content::new(&gtk_window, state);
-
-        Self {
-            gtk_window,
-            content,
+        {
+            let w = gtk_window.clone();
+            gtk_window.connect_delete_event(move |_, _| {
+                w.destroy();
+                Inhibit(false)
+            });
         }
+
+        let toolbar = Toolbar::new();
+        gtk_window.set_titlebar(&toolbar.container);
+
+        let content = Content::new(&gtk_window);
+
+        // Hook up toolbar button actions here.
+        {
+            let s = Arc::clone(&state);
+            let w = gtk_window.clone();
+            let c = Arc::clone(&content);
+            toolbar.open_button.connect_clicked(move |_| {
+                let mut state = s.lock().unwrap();
+                // TODO: Figure out some kind of error handling, maybe
+                // involving storing errors in `AppState`.
+                let nx_file = if let Some(nf) = open_file(&w).unwrap() {
+                    nf
+                } else {
+                    return;
+                };
+                state.open_files.new_file(nx_file, &c);
+
+                println!(
+                    "{}",
+                    state
+                        .open_files
+                        .get_file(0)
+                        .unwrap()
+                        .node_count()
+                );
+            });
+        }
+        {
+            let w = gtk_window.clone();
+            toolbar.about_button.connect_clicked(move |_| {
+                if let Err(e) = run_about_dialog(&w) {
+                    eprintln!("{}", e);
+                }
+            });
+        }
+
+        Ok(Self {
+            gtk_window,
+            toolbar,
+            content,
+        })
     }
 }
 
 impl Content {
-    pub fn new(
-        window: &gtk::ApplicationWindow,
-        state: &Arc<Mutex<AppState>>,
-    ) -> Arc<Mutex<Self>> {
+    pub fn new(window: &gtk::ApplicationWindow) -> Arc<Mutex<Self>> {
         let main_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
-
-        //
-        let toolbar = Toolbar::new();
-        main_box.pack_start(&toolbar.gtk_toolbar, true, false, 0);
-
         window.add(&main_box);
 
-        let ret = Arc::new(Mutex::new(Self {
+        Arc::new(Mutex::new(Self {
             main_box,
-            toolbar,
             tree_view: None,
-        }));
-
-        {
-            let s = Arc::clone(&state);
-            let w = window.clone();
-            let c = Arc::clone(&ret);
-            ret.lock()
-                .unwrap()
-                .toolbar
-                .open_button
-                .connect_clicked(move |_| {
-                    let mut state = s.lock().unwrap();
-                    // TODO: Figure out some kind of error handling, maybe
-                    // involving storing errors in `AppState`.
-                    state
-                        .open_files
-                        .new_file(open_file(&w).unwrap().unwrap(), &c);
-
-                    println!(
-                        "{}",
-                        state
-                            .open_files
-                            .get_file(0)
-                            .unwrap()
-                            .node_count()
-                    );
-                });
-        }
-
-        ret
+        }))
     }
 }
 
 impl Toolbar {
     pub fn new() -> Self {
-        let gtk_toolbar = gtk::Toolbar::new();
-        gtk_toolbar.set_vexpand(false);
-        gtk_toolbar.set_vexpand_set(true);
+        let container = gtk::HeaderBar::new();
+        container.set_title("nx_edit");
+        container.set_show_close_button(true);
 
         // Add buttons to toolbar.
         let open_button =
             gtk::ToolButton::new(&gtk::Label::new("open file"), "open file");
-        gtk_toolbar.insert(&open_button, 0);
+        container.pack_start(&open_button);
 
-        let about_button = gtk::ToolButton::new(&gtk::Label::new("about"), //&gtk::Image::new_from_file("img/about.svg")
-                                                "about");
-        gtk_toolbar.insert(&about_button, 1);
-        // toolbar.insert(...
+        let about_button =
+            gtk::ToolButton::new(&gtk::Label::new("about"), "about");
+        container.pack_start(&about_button);
+        // container.pack_start(...
 
         Self {
-            gtk_toolbar,
+            container,
             open_button,
             about_button,
         }
@@ -178,16 +184,19 @@ fn open_file(
     let res = match dialog_res {
         gtk::ResponseType::Accept =>
             if let Some(file) = file_dialog.get_file() {
-                let path = &file.get_path()
-                    .ok_or(Error::Gio("`gio::File` has no path"))?;
+                let path = &file.get_path().ok_or_else(|| {
+                    Error::Gio("`gio::File` has no path".to_owned())
+                })?;
 
                 if path.extension().and_then(|os| os.to_str()) == Some("nx") {
                     Ok(unsafe { nx::File::open(path).map(Some)? })
                 } else {
                     eprintln!("Filename doesn't match \"*.nx\"");
-                    run_err_msg_dialog(
+                    run_msg_dialog(
                         &file_dialog,
+                        "wrong file type",
                         "wrong file type (must be *.nx).",
+                        gtk::MessageType::Error,
                     );
 
                     Ok(None)
@@ -204,15 +213,49 @@ fn open_file(
     res
 }
 
-pub fn run_err_msg_dialog<W: IsA<gtk::Window>>(parent: &W, msg: &str) {
+pub fn run_msg_dialog<W: IsA<gtk::Window>>(
+    parent: &W,
+    title: &str,
+    msg: &str,
+    msg_type: gtk::MessageType,
+) {
     let md = gtk::MessageDialog::new(
         Some(parent),
         gtk::DialogFlags::from_bits(0b11).unwrap(),
-        gtk::MessageType::Error,
+        msg_type,
         gtk::ButtonsType::Close,
         msg,
     );
+    md.set_title(title);
 
     md.run();
     md.destroy();
+}
+
+pub fn run_about_dialog<
+    'a,
+    P: gtk::IsA<gtk::Window> + 'a,
+    Q: Into<Option<&'a P>>,
+>(
+    parent: Q,
+) -> Result<(), Error> {
+    let ad = gtk::AboutDialog::new();
+    ad.set_transient_for(parent);
+    ad.set_copyright(
+        "(ɔ) copyleft 2018-2019, IntransigentMS v2 Team. all rites reversed.",
+    );
+    ad.set_license_type(gtk::License::Agpl30);
+    ad.set_logo(&Pixbuf::new_from_file_at_size(
+        "img/nx_edit.svg",
+        128,
+        128,
+    )?);
+    ad.set_program_name("nx_edit");
+    ad.set_website("https://bitbucket.org/NoetherEmmy/nx_edit");
+    ad.set_website_label("source");
+
+    ad.run();
+    ad.destroy();
+
+    Ok(())
 }
