@@ -9,6 +9,7 @@ extern crate gio;
 extern crate glib;
 extern crate gtk;
 extern crate nx;
+extern crate pango;
 
 use err::Error;
 use gio::prelude::*;

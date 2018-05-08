@@ -1,6 +1,6 @@
 [package]
 name = "nx_edit"
-version = "0.0.0"
+version = "0.1.0"
 authors = ["Emmy Noether <intransigentms@gmail.com>"]
 
 [dependencies]
@@ -9,6 +9,7 @@ gio = "*"
 glib = "*"
 gtk = { version = "*", features = ["v3_22"] }
 nx = "*"
+pango = "*"
 
 [features]
 default = []

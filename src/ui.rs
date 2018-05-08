@@ -104,6 +104,32 @@ impl Window {
             });
         }
 
+        // Hooking up window resize events here.
+        {
+            let c = Arc::clone(&content);
+            gtk_window.connect_configure_event(move |_, event| {
+                let (new_width, _) = event.get_size();
+
+                c.lock().unwrap().tree_view.as_ref().map(|tv| {
+                    tv.gtk_tree_view
+                        .get_columns()
+                        .iter()
+                        .for_each(|col| {
+                            col.get_cells()
+                                .iter()
+                                .map(|cell| cell.clone().downcast().unwrap())
+                                .for_each(|cell: gtk::CellRendererText| {
+                                    cell.set_property_wrap_width(
+                                        (new_width * 3 / 4) as i32,
+                                    );
+                                });
+                        });
+                });
+
+                false
+            });
+        }
+
         Ok(Self {
             gtk_window,
             toolbar,
@@ -253,6 +279,7 @@ pub fn run_about_dialog<
     ad.set_program_name("nx_edit");
     ad.set_website("https://bitbucket.org/NoetherEmmy/nx_edit");
     ad.set_website_label("source");
+    ad.set_version(env!("CARGO_PKG_VERSION"));
 
     ad.run();
     ad.destroy();

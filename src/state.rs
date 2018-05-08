@@ -8,6 +8,7 @@ use gtk::{
     WidgetExt,
 };
 use nx::{self, GenericNode};
+use pango::{EllipsizeMode, WrapMode};
 use std::sync::{Arc, Mutex, MutexGuard};
 use ui::{Content, TreeView};
 
@@ -252,6 +253,10 @@ pub fn nx_onto_tree_store(
 pub fn append_text_column(tree: &gtk::TreeView, col_ix: i32) {
     let column = gtk::TreeViewColumn::new();
     let cell = gtk::CellRendererText::new();
+
+    cell.set_property_ellipsize(EllipsizeMode::None);
+    cell.set_property_wrap_mode(WrapMode::Word);
+    cell.set_property_wrap_width(400);
 
     column.pack_start(&cell, true);
     column.add_attribute(&cell, "text", col_ix);
