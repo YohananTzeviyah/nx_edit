@@ -10,7 +10,7 @@ use gtk::{
 use nx::{self, GenericNode};
 use pango::{EllipsizeMode, WrapMode};
 use std::sync::{Arc, Mutex, MutexGuard};
-use ui::{Content, TreeView};
+use ui::{Content, NodeView, TreeView};
 
 pub struct AppState {
     pub open_files: OpenFiles,
@@ -41,22 +41,11 @@ impl OpenFiles {
 
         let nf_unwrapped = nf.lock().unwrap();
         let root = nf_unwrapped.root();
-        let tree_store = match root.dtype() {
-            nx::Type::Integer =>
-                gtk::TreeStore::new(&[gtk::Type::String, gtk::Type::I64]),
-            nx::Type::Float =>
-                gtk::TreeStore::new(&[gtk::Type::String, gtk::Type::F64]),
-            nx::Type::Vector => gtk::TreeStore::new(&[
-                gtk::Type::String,
-                gtk::Type::I32,
-                gtk::Type::I32,
-            ]),
-            nx::Type::Bitmap | nx::Type::Audio => gtk::TreeStore::new(&[
-                gtk::Type::String,
-                gtk::Type::BaseObject,
-            ]),
-            _ => gtk::TreeStore::new(&[gtk::Type::String, gtk::Type::String]),
-        };
+        let tree_store = gtk::TreeStore::new(&[
+            gtk::Type::String,
+            gtk::Type::String,
+            Pixbuf::static_type(),
+        ]);
 
         let root_iter = nx_onto_tree_store(&root, &tree_store, None);
 
@@ -74,6 +63,7 @@ impl OpenFiles {
 
         append_text_column(&tree_view, 0);
         append_text_column(&tree_view, 1);
+        append_pixbuf_column(&tree_view, 2);
 
         {
             let f = Arc::clone(&nf);
@@ -97,7 +87,6 @@ impl OpenFiles {
                         }
                     } else {
                         // No data.
-                        println!("return Inhibit(true);");
                         return Inhibit(true);
                     };
 
@@ -158,6 +147,12 @@ impl OpenFiles {
 
         let mut c = content.lock().unwrap();
 
+        //
+        let node_view_struct = NodeView::new(&c.main_box, None);
+        //node_view_struct.show();
+        c.node_view = Some(node_view_struct);
+
+        //
         let tree_view_struct = TreeView::new(&c.main_box, tree_view);
         tree_view_struct.scroll_win.show_all();
         c.tree_view = Some(tree_view_struct);
@@ -204,12 +199,16 @@ pub fn nx_onto_tree_store(
                 parent,
                 None,
                 &[0, 1],
-                &[&node_name, &x, &y],
+                &[&node_name, &format!("⟨{}, {}⟩", x, y)],
             )
         },
-        nx::Type::Bitmap => store.insert_with_values(parent, None, &[0, 1], {
+        nx::Type::Bitmap => store.insert_with_values(parent, None, &[0, 2], {
             let bitmap = node.bitmap().unwrap();
-            let mut vec = Vec::with_capacity(bitmap.len() as usize);
+            let bitmap_len = bitmap.len() as usize;
+            let mut vec = Vec::with_capacity(bitmap_len);
+            unsafe {
+                vec.set_len(bitmap_len);
+            }
             bitmap.data(&mut vec);
 
             // Convert from BGRA8888 to RGBA8888.
@@ -220,19 +219,18 @@ pub fn nx_onto_tree_store(
                 i32::from(bitmap.width()),
                 i32::from(bitmap.height()),
             );
-            let pixbuf = Pixbuf::new_from_vec(
-                vec,
-                Colorspace::Rgb,
-                true,
-                32,
-                width,
-                height,
-                width * 4,
-            );
 
             &[
                 &node_name,
-                &gtk::Image::new_from_pixbuf(&pixbuf),
+                &Pixbuf::new_from_vec(
+                    vec,
+                    Colorspace::Rgb,
+                    true,
+                    8,
+                    width,
+                    height,
+                    width * 4,
+                ),
             ]
         }),
         nx::Type::Audio => store.insert_with_values(
@@ -256,10 +254,21 @@ pub fn append_text_column(tree: &gtk::TreeView, col_ix: i32) {
 
     cell.set_property_ellipsize(EllipsizeMode::None);
     cell.set_property_wrap_mode(WrapMode::Word);
-    cell.set_property_wrap_width(400);
+    cell.set_property_wrap_width(256);
 
     column.pack_start(&cell, true);
     column.add_attribute(&cell, "text", col_ix);
+    tree.append_column(&column);
+}
+
+pub fn append_pixbuf_column(tree: &gtk::TreeView, col_ix: i32) {
+    let column = gtk::TreeViewColumn::new();
+    let cell = gtk::CellRendererPixbuf::new();
+
+    // cell.set_property_... ;
+
+    column.pack_start(&cell, true);
+    column.add_attribute(&cell, "pixbuf", col_ix);
     tree.append_column(&column);
 }
 

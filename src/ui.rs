@@ -19,6 +19,7 @@ pub struct Window {
 
 pub struct Content {
     pub main_box:  gtk::Box,
+    pub node_view: Option<NodeView>,
     pub tree_view: Option<TreeView>,
 }
 
@@ -27,6 +28,17 @@ pub struct Toolbar {
     pub open_button:  gtk::Button,
     pub close_button: gtk::Button,
     pub about_button: gtk::Button,
+}
+
+pub enum NodeDisplay {
+    Nothing(gtk::Label),
+    Label(gtk::Label),
+    Image(gtk::Image),
+    Audio(u8), // TODO
+}
+
+pub struct NodeView {
+    pub node_display: NodeDisplay,
 }
 
 pub struct TreeView {
@@ -111,21 +123,23 @@ impl Window {
             gtk_window.connect_configure_event(move |_, event| {
                 let (new_width, _) = event.get_size();
 
-                c.lock().unwrap().tree_view.as_ref().map(|tv| {
+                if let Some(tv) = c.lock().unwrap().tree_view.as_ref() {
                     tv.gtk_tree_view
                         .get_columns()
                         .iter()
                         .for_each(|col| {
                             col.get_cells()
                                 .iter()
-                                .map(|cell| cell.clone().downcast().unwrap())
+                                .filter_map(|cell| {
+                                    cell.clone().downcast().ok()
+                                })
                                 .for_each(|cell: gtk::CellRendererText| {
                                     cell.set_property_wrap_width(
-                                        (new_width * 3 / 4) as i32,
+                                        (new_width / 2) as i32,
                                     );
                                 });
                         });
-                });
+                }
 
                 false
             });
@@ -141,11 +155,12 @@ impl Window {
 
 impl Content {
     pub fn new(window: &gtk::ApplicationWindow) -> Arc<Mutex<Self>> {
-        let main_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        let main_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         window.add(&main_box);
 
         Arc::new(Mutex::new(Self {
             main_box,
+            node_view: None,
             tree_view: None,
         }))
     }
@@ -159,15 +174,15 @@ impl Toolbar {
 
         // Add buttons to toolbar.
         let open_button = gtk::Button::new_with_label("open file");
-        open_button
-            .get_style_context()
-            .map(|c| c.add_class("suggested-action"));
+        if let Some(c) = open_button.get_style_context() {
+            c.add_class("suggested-action");
+        }
         container.pack_start(&open_button);
 
         let close_button = gtk::Button::new_with_label("close file");
-        close_button
-            .get_style_context()
-            .map(|c| c.add_class("destructive-action"));
+        if let Some(c) = close_button.get_style_context() {
+            c.add_class("destructive-action");
+        }
         container.pack_start(&close_button);
 
         let about_button = gtk::Button::new_with_label("about");
@@ -182,6 +197,47 @@ impl Toolbar {
     }
 }
 
+impl NodeView {
+    pub fn new<N: Into<Option<NodeDisplay>>>(
+        main_box: &gtk::Box,
+        node_display: N,
+    ) -> Self {
+        let node_display = match node_display.into() {
+            Some(NodeDisplay::Label(l)) => {
+                main_box.pack_start(&l, true, true, 8);
+                NodeDisplay::Label(l)
+            },
+            Some(NodeDisplay::Image(i)) => {
+                main_box.pack_start(&i, true, true, 8);
+                NodeDisplay::Image(i)
+            },
+            Some(NodeDisplay::Audio(_)) =>
+                unimplemented!("TODO: NodeDisplay::Audio"),
+            Some(NodeDisplay::Nothing(n)) => {
+                main_box.pack_start(&n, true, true, 8);
+                NodeDisplay::Nothing(n)
+            },
+            _ => {
+                let blank_label = gtk::Label::new("");
+                main_box.pack_start(&blank_label, true, true, 8);
+                NodeDisplay::Nothing(blank_label)
+            },
+        };
+
+        Self { node_display }
+    }
+
+    pub fn show(&self) {
+        match self.node_display {
+            NodeDisplay::Nothing(ref n) => n.show_all(),
+            NodeDisplay::Label(ref l) => l.show_all(),
+            NodeDisplay::Image(ref i) => i.show_all(),
+            NodeDisplay::Audio(_) =>
+                unimplemented!("TODO: NodeDisplay::Audio"),
+        }
+    }
+}
+
 impl TreeView {
     pub fn new(main_box: &gtk::Box, gtk_tree_view: gtk::TreeView) -> Self {
         let scroll_win = gtk::ScrolledWindow::new(None, None);
@@ -189,7 +245,7 @@ impl TreeView {
 
         scroll_win.add(&gtk_tree_view);
 
-        main_box.pack_start(&scroll_win, true, true, 8);
+        main_box.pack_end(&scroll_win, true, true, 8);
 
         Self {
             scroll_win,
