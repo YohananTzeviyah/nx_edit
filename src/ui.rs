@@ -38,6 +38,7 @@ pub enum NodeDisplay {
 }
 
 pub struct NodeView {
+    pub main_box:     gtk::Box,
     pub node_display: NodeDisplay,
 }
 
@@ -100,11 +101,7 @@ impl Window {
 
                 println!(
                     "{}",
-                    state
-                        .open_files
-                        .get_file(0)
-                        .unwrap()
-                        .node_count()
+                    state.open_files.get_file(0).unwrap().node_count()
                 );
             });
         }
@@ -124,21 +121,16 @@ impl Window {
                 let (new_width, _) = event.get_size();
 
                 if let Some(tv) = c.lock().unwrap().tree_view.as_ref() {
-                    tv.gtk_tree_view
-                        .get_columns()
-                        .iter()
-                        .for_each(|col| {
-                            col.get_cells()
-                                .iter()
-                                .filter_map(|cell| {
-                                    cell.clone().downcast().ok()
-                                })
-                                .for_each(|cell: gtk::CellRendererText| {
-                                    cell.set_property_wrap_width(
-                                        (new_width / 2) as i32,
-                                    );
-                                });
-                        });
+                    tv.gtk_tree_view.get_columns().iter().for_each(|col| {
+                        col.get_cells()
+                            .iter()
+                            .filter_map(|cell| cell.clone().downcast().ok())
+                            .for_each(|cell: gtk::CellRendererText| {
+                                cell.set_property_wrap_width(
+                                    (new_width / 3) as i32,
+                                );
+                            });
+                    });
                 }
 
                 false
@@ -156,6 +148,8 @@ impl Window {
 impl Content {
     pub fn new(window: &gtk::ApplicationWindow) -> Arc<Mutex<Self>> {
         let main_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        main_box.set_homogeneous(false);
+
         window.add(&main_box);
 
         Arc::new(Mutex::new(Self {
@@ -224,7 +218,33 @@ impl NodeView {
             },
         };
 
-        Self { node_display }
+        Self {
+            main_box: main_box.clone(),
+            node_display,
+        }
+    }
+
+    pub fn set_node_display(&mut self, node_display: NodeDisplay) {
+        match self.node_display {
+            NodeDisplay::Nothing(ref n) => n.destroy(),
+            NodeDisplay::Label(ref l) => l.destroy(),
+            NodeDisplay::Image(ref i) => i.destroy(),
+            NodeDisplay::Audio(_) =>
+                unimplemented!("TODO: NodeDisplay::Audio"),
+        }
+
+        self.node_display = node_display;
+
+        match self.node_display {
+            NodeDisplay::Nothing(ref n) =>
+                self.main_box.pack_start(n, true, true, 8),
+            NodeDisplay::Label(ref l) =>
+                self.main_box.pack_start(l, true, true, 8),
+            NodeDisplay::Image(ref i) =>
+                self.main_box.pack_start(i, true, true, 8),
+            NodeDisplay::Audio(_) =>
+                unimplemented!("TODO: NodeDisplay::Audio"),
+        }
     }
 
     pub fn show(&self) {
@@ -242,6 +262,10 @@ impl TreeView {
     pub fn new(main_box: &gtk::Box, gtk_tree_view: gtk::TreeView) -> Self {
         let scroll_win = gtk::ScrolledWindow::new(None, None);
         scroll_win.set_property_expand(true);
+        scroll_win.set_hexpand(true);
+        scroll_win.set_hexpand_set(true);
+        scroll_win.set_vexpand(true);
+        scroll_win.set_vexpand_set(true);
 
         scroll_win.add(&gtk_tree_view);
 
@@ -335,11 +359,7 @@ pub fn run_about_dialog<
         "(ɔ) copyleft 2018-2019, IntransigentMS v2 Team. all rites reversed.",
     );
     ad.set_license_type(gtk::License::Agpl30);
-    ad.set_logo(&Pixbuf::new_from_file_at_size(
-        "img/nx_edit.svg",
-        128,
-        128,
-    )?);
+    ad.set_logo(&Pixbuf::new_from_file_at_size("img/nx_edit.svg", 128, 128)?);
     ad.set_program_name("nx_edit");
     ad.set_website("https://bitbucket.org/NoetherEmmy/nx_edit");
     ad.set_website_label("source");

@@ -10,7 +10,7 @@ use gtk::{
 use nx::{self, GenericNode};
 use pango::{EllipsizeMode, WrapMode};
 use std::sync::{Arc, Mutex, MutexGuard};
-use ui::{Content, NodeView, TreeView};
+use ui::{Content, NodeDisplay, NodeView, TreeView};
 
 pub struct AppState {
     pub open_files: OpenFiles,
@@ -35,7 +35,7 @@ impl OpenFiles {
         }
     }
 
-    pub fn new_file(&mut self, nf: nx::File, content: &Mutex<Content>) {
+    pub fn new_file(&mut self, nf: nx::File, content: &Arc<Mutex<Content>>) {
         self.files.push(Arc::new(Mutex::new(nf)));
         let nf = &self.files[self.files.len() - 1];
 
@@ -113,7 +113,7 @@ impl OpenFiles {
             });
         }
 
-        tree_view.connect_test_collapse_row(move |tv, titer, _| {
+        tree_view.connect_test_collapse_row(|tv, titer, _| {
             let model_store: gtk::TreeStore = tv.get_model()
                 .clone()
                 .expect("gtk::TreeView expected to have a gtk::TreeModel")
@@ -145,11 +145,59 @@ impl OpenFiles {
             Inhibit(false)
         });
 
+        {
+            let c = Arc::clone(&content);
+            tree_view.connect_cursor_changed(move |tv| {
+                println!(
+                    "cursor_changed: {:?}",
+                    tv.get_cursor()
+                        .0
+                        .map(|cur| cur.get_indices())
+                        .unwrap_or(Vec::new())
+                );
+
+                let path = if let (Some(p), _) = tv.get_cursor() {
+                    p
+                } else {
+                    return;
+                };
+                let model =
+                    tv.get_model().expect("No model for gtk::TreeView");
+                if let Some(iter) = model.get_iter(&path) {
+                    let (val0, val1, val2) = (
+                        model.get_value(&iter, 0),
+                        model.get_value(&iter, 1),
+                        model.get_value(&iter, 2),
+                    );
+                    //println!("({:?}, {:?}, {:?})", val0, val1, val2);
+
+                    let mut c = c.lock().unwrap();
+                    if let Some(ref mut nv) = c.node_view {
+                        if let Some(text) = val1.get::<&str>() {
+                            nv.set_node_display(NodeDisplay::Label(
+                                gtk::Label::new(text),
+                            ));
+                        } else if let Some(pixbuf) = val2.get::<Pixbuf>() {
+                            nv.set_node_display(NodeDisplay::Image(
+                                gtk::Image::new_from_pixbuf(&pixbuf),
+                            ));
+                        } else {
+                            return;
+                        }
+                        nv.show();
+                    }
+                }
+            });
+        }
+        //tree_view.connect_row_activated(|_, tpath, _| {
+        //    println!("row_activated: {:?}", tpath.get_indices());
+        //});
+
         let mut c = content.lock().unwrap();
 
         //
         let node_view_struct = NodeView::new(&c.main_box, None);
-        //node_view_struct.show();
+        node_view_struct.show();
         c.node_view = Some(node_view_struct);
 
         //
@@ -159,9 +207,7 @@ impl OpenFiles {
     }
 
     pub fn get_file(&self, index: usize) -> Option<MutexGuard<nx::File>> {
-        self.files
-            .get(index)
-            .map(|nf| nf.lock().unwrap())
+        self.files.get(index).map(|nf| nf.lock().unwrap())
     }
 }
 
@@ -174,7 +220,7 @@ pub fn nx_onto_tree_store(
 
     match node.dtype() {
         nx::Type::Empty =>
-            store.insert_with_values(parent, None, &[0, 1], &[&node_name, &""]),
+            store.insert_with_values(parent, None, &[0], &[&node_name]),
         nx::Type::Integer => store.insert_with_values(
             parent,
             None,
@@ -212,13 +258,10 @@ pub fn nx_onto_tree_store(
             bitmap.data(&mut vec);
 
             // Convert from BGRA8888 to RGBA8888.
-            vec.exact_chunks_mut(4)
-                .for_each(|bgra| bgra.swap(0, 2));
+            vec.exact_chunks_mut(4).for_each(|bgra| bgra.swap(0, 2));
 
-            let (width, height) = (
-                i32::from(bitmap.width()),
-                i32::from(bitmap.height()),
-            );
+            let (width, height) =
+                (i32::from(bitmap.width()), i32::from(bitmap.height()));
 
             &[
                 &node_name,
