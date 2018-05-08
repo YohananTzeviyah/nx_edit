@@ -2,6 +2,9 @@
 name = "nx_edit"
 version = "0.1.0"
 authors = ["Emmy Noether <intransigentms@gmail.com>"]
+repository = "https://bitbucket.org/NoetherEmmy/nx_edit"
+readme = "README.md"
+license = "AGPL-3.0-or-later"
 
 [dependencies]
 gdk-pixbuf = "*"
