@@ -148,6 +148,7 @@ impl OpenFiles {
         {
             let c = Arc::clone(&content);
             tree_view.connect_cursor_changed(move |tv| {
+                /*
                 println!(
                     "cursor_changed: {:?}",
                     tv.get_cursor()
@@ -155,6 +156,7 @@ impl OpenFiles {
                         .map(|cur| cur.get_indices())
                         .unwrap_or(Vec::new())
                 );
+                */
 
                 let path = if let (Some(p), _) = tv.get_cursor() {
                     p
@@ -174,8 +176,10 @@ impl OpenFiles {
                     let mut c = c.lock().unwrap();
                     if let Some(ref mut nv) = c.node_view {
                         if let Some(text) = val1.get::<&str>() {
-                            nv.set_node_display(NodeDisplay::Label(
-                                gtk::Label::new(text),
+                            let buf = gtk::TextBuffer::new(None);
+                            buf.set_text(text);
+                            nv.set_node_display(NodeDisplay::Text(
+                                gtk::TextView::new_with_buffer(&buf),
                             ));
                         } else if let Some(pixbuf) = val2.get::<Pixbuf>() {
                             nv.set_node_display(NodeDisplay::Image(

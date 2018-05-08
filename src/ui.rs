@@ -32,7 +32,7 @@ pub struct Toolbar {
 
 pub enum NodeDisplay {
     Nothing(gtk::Label),
-    Label(gtk::Label),
+    Text(gtk::TextView),
     Image(gtk::Image),
     Audio(u8), // TODO
 }
@@ -127,7 +127,7 @@ impl Window {
                             .filter_map(|cell| cell.clone().downcast().ok())
                             .for_each(|cell: gtk::CellRendererText| {
                                 cell.set_property_wrap_width(
-                                    (new_width / 3) as i32,
+                                    (new_width / 3 - 64) as i32,
                                 );
                             });
                     });
@@ -148,7 +148,7 @@ impl Window {
 impl Content {
     pub fn new(window: &gtk::ApplicationWindow) -> Arc<Mutex<Self>> {
         let main_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        main_box.set_homogeneous(false);
+        main_box.set_homogeneous(true);
 
         window.add(&main_box);
 
@@ -197,22 +197,27 @@ impl NodeView {
         node_display: N,
     ) -> Self {
         let node_display = match node_display.into() {
-            Some(NodeDisplay::Label(l)) => {
-                main_box.pack_start(&l, true, true, 8);
-                NodeDisplay::Label(l)
+            Some(NodeDisplay::Text(t)) => {
+                noexpand(&t);
+                config_text_view(&t);
+                main_box.pack_start(&t, true, true, 8);
+                NodeDisplay::Text(t)
             },
             Some(NodeDisplay::Image(i)) => {
+                noexpand(&i);
                 main_box.pack_start(&i, true, true, 8);
                 NodeDisplay::Image(i)
             },
             Some(NodeDisplay::Audio(_)) =>
                 unimplemented!("TODO: NodeDisplay::Audio"),
             Some(NodeDisplay::Nothing(n)) => {
+                noexpand(&n);
                 main_box.pack_start(&n, true, true, 8);
                 NodeDisplay::Nothing(n)
             },
             _ => {
                 let blank_label = gtk::Label::new("");
+                noexpand(&blank_label);
                 main_box.pack_start(&blank_label, true, true, 8);
                 NodeDisplay::Nothing(blank_label)
             },
@@ -227,7 +232,7 @@ impl NodeView {
     pub fn set_node_display(&mut self, node_display: NodeDisplay) {
         match self.node_display {
             NodeDisplay::Nothing(ref n) => n.destroy(),
-            NodeDisplay::Label(ref l) => l.destroy(),
+            NodeDisplay::Text(ref t) => t.destroy(),
             NodeDisplay::Image(ref i) => i.destroy(),
             NodeDisplay::Audio(_) =>
                 unimplemented!("TODO: NodeDisplay::Audio"),
@@ -236,12 +241,19 @@ impl NodeView {
         self.node_display = node_display;
 
         match self.node_display {
-            NodeDisplay::Nothing(ref n) =>
-                self.main_box.pack_start(n, true, true, 8),
-            NodeDisplay::Label(ref l) =>
-                self.main_box.pack_start(l, true, true, 8),
-            NodeDisplay::Image(ref i) =>
-                self.main_box.pack_start(i, true, true, 8),
+            NodeDisplay::Nothing(ref n) => {
+                noexpand(n);
+                self.main_box.pack_start(n, true, true, 8);
+            },
+            NodeDisplay::Text(ref t) => {
+                noexpand(t);
+                config_text_view(t);
+                self.main_box.pack_start(t, true, true, 8);
+            },
+            NodeDisplay::Image(ref i) => {
+                noexpand(i);
+                self.main_box.pack_start(i, true, true, 8);
+            },
             NodeDisplay::Audio(_) =>
                 unimplemented!("TODO: NodeDisplay::Audio"),
         }
@@ -250,7 +262,7 @@ impl NodeView {
     pub fn show(&self) {
         match self.node_display {
             NodeDisplay::Nothing(ref n) => n.show_all(),
-            NodeDisplay::Label(ref l) => l.show_all(),
+            NodeDisplay::Text(ref t) => t.show_all(),
             NodeDisplay::Image(ref i) => i.show_all(),
             NodeDisplay::Audio(_) =>
                 unimplemented!("TODO: NodeDisplay::Audio"),
@@ -261,11 +273,7 @@ impl NodeView {
 impl TreeView {
     pub fn new(main_box: &gtk::Box, gtk_tree_view: gtk::TreeView) -> Self {
         let scroll_win = gtk::ScrolledWindow::new(None, None);
-        scroll_win.set_property_expand(true);
-        scroll_win.set_hexpand(true);
-        scroll_win.set_hexpand_set(true);
-        scroll_win.set_vexpand(true);
-        scroll_win.set_vexpand_set(true);
+        expand(&scroll_win);
 
         scroll_win.add(&gtk_tree_view);
 
@@ -369,4 +377,30 @@ pub fn run_about_dialog<
     ad.destroy();
 
     Ok(())
+}
+
+pub fn noexpand<W: gtk::WidgetExt>(w: &W) {
+    w.set_property_expand(false);
+    w.set_hexpand(false);
+    w.set_hexpand_set(true);
+    w.set_vexpand(false);
+    w.set_vexpand_set(true);
+}
+
+pub fn expand<W: gtk::WidgetExt>(w: &W) {
+    w.set_property_expand(true);
+    w.set_hexpand(true);
+    w.set_hexpand_set(true);
+    w.set_vexpand(true);
+    w.set_vexpand_set(true);
+}
+
+pub fn config_text_view(t: &gtk::TextView) {
+    t.set_wrap_mode(gtk::WrapMode::Word);
+    t.set_accepts_tab(false); // You have to use '\t' anyways.
+    t.set_cursor_visible(true);
+    t.set_editable(true);
+    t.set_input_purpose(gtk::InputPurpose::FreeForm);
+    t.set_justification(gtk::Justification::Left);
+    t.set_monospace(true);
 }
