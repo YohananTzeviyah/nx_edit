@@ -10,7 +10,7 @@ use gtk::{
 use nx::{self, GenericNode};
 use pango::{EllipsizeMode, WrapMode};
 use std::sync::{Arc, Mutex, MutexGuard};
-use ui::{Content, NodeDisplay, NodeView, TreeView};
+use ui::{Content, NodeView, TreeView};
 
 pub struct AppState {
     pub open_files: OpenFiles,
@@ -57,7 +57,7 @@ impl OpenFiles {
         tree_view.set_halign(gtk::Align::Center);
         tree_view.set_valign(gtk::Align::Start);
         tree_view.set_property_expand(true);
-        tree_view.set_headers_visible(true);
+        tree_view.set_headers_visible(false);
         tree_view.set_enable_tree_lines(true);
         tree_view.set_vscroll_policy(gtk::ScrollablePolicy::Natural);
 
@@ -176,15 +176,9 @@ impl OpenFiles {
                     let mut c = c.lock().unwrap();
                     if let Some(ref mut nv) = c.node_view {
                         if let Some(text) = val1.get::<&str>() {
-                            let buf = gtk::TextBuffer::new(None);
-                            buf.set_text(text);
-                            nv.set_node_display(NodeDisplay::Text(
-                                gtk::TextView::new_with_buffer(&buf),
-                            ));
+                            nv.set_text(text);
                         } else if let Some(pixbuf) = val2.get::<Pixbuf>() {
-                            nv.set_node_display(NodeDisplay::Image(
-                                gtk::Image::new_from_pixbuf(&pixbuf),
-                            ));
+                            nv.set_img(gtk::Image::new_from_pixbuf(&pixbuf));
                         } else {
                             return;
                         }
@@ -200,7 +194,7 @@ impl OpenFiles {
         let mut c = content.lock().unwrap();
 
         //
-        let node_view_struct = NodeView::new(&c.main_box, None);
+        let node_view_struct = NodeView::new_empty(&c.main_box);
         node_view_struct.show();
         c.node_view = Some(node_view_struct);
 

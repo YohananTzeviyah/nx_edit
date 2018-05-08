@@ -32,7 +32,7 @@ pub struct Toolbar {
 
 pub enum NodeDisplay {
     Nothing(gtk::Label),
-    Text(gtk::TextView),
+    Text(gtk::ScrolledWindow, gtk::TextView),
     Image(gtk::Image),
     Audio(u8), // TODO
 }
@@ -192,35 +192,12 @@ impl Toolbar {
 }
 
 impl NodeView {
-    pub fn new<N: Into<Option<NodeDisplay>>>(
-        main_box: &gtk::Box,
-        node_display: N,
-    ) -> Self {
-        let node_display = match node_display.into() {
-            Some(NodeDisplay::Text(t)) => {
-                noexpand(&t);
-                config_text_view(&t);
-                main_box.pack_start(&t, true, true, 8);
-                NodeDisplay::Text(t)
-            },
-            Some(NodeDisplay::Image(i)) => {
-                noexpand(&i);
-                main_box.pack_start(&i, true, true, 8);
-                NodeDisplay::Image(i)
-            },
-            Some(NodeDisplay::Audio(_)) =>
-                unimplemented!("TODO: NodeDisplay::Audio"),
-            Some(NodeDisplay::Nothing(n)) => {
-                noexpand(&n);
-                main_box.pack_start(&n, true, true, 8);
-                NodeDisplay::Nothing(n)
-            },
-            _ => {
-                let blank_label = gtk::Label::new("");
-                noexpand(&blank_label);
-                main_box.pack_start(&blank_label, true, true, 8);
-                NodeDisplay::Nothing(blank_label)
-            },
+    pub fn new_empty(main_box: &gtk::Box) -> Self {
+        let node_display = {
+            let blank_label = gtk::Label::new("");
+            noexpand(&blank_label);
+            main_box.pack_start(&blank_label, true, true, 0);
+            NodeDisplay::Nothing(blank_label)
         };
 
         Self {
@@ -229,41 +206,48 @@ impl NodeView {
         }
     }
 
-    pub fn set_node_display(&mut self, node_display: NodeDisplay) {
-        match self.node_display {
-            NodeDisplay::Nothing(ref n) => n.destroy(),
-            NodeDisplay::Text(ref t) => t.destroy(),
-            NodeDisplay::Image(ref i) => i.destroy(),
-            NodeDisplay::Audio(_) =>
-                unimplemented!("TODO: NodeDisplay::Audio"),
-        }
+    pub fn set_text(&mut self, text: &str) {
+        self.destroy();
 
-        self.node_display = node_display;
+        let scroll_win = gtk::ScrolledWindow::new(None, None);
+        noexpand(&scroll_win);
 
-        match self.node_display {
-            NodeDisplay::Nothing(ref n) => {
-                noexpand(n);
-                self.main_box.pack_start(n, true, true, 8);
-            },
-            NodeDisplay::Text(ref t) => {
-                noexpand(t);
-                config_text_view(t);
-                self.main_box.pack_start(t, true, true, 8);
-            },
-            NodeDisplay::Image(ref i) => {
-                noexpand(i);
-                self.main_box.pack_start(i, true, true, 8);
-            },
-            NodeDisplay::Audio(_) =>
-                unimplemented!("TODO: NodeDisplay::Audio"),
-        }
+        let text_view = {
+            let buf = gtk::TextBuffer::new(None);
+            buf.set_text(text);
+            gtk::TextView::new_with_buffer(&buf)
+        };
+        config_text_view(&text_view);
+        scroll_win.add(&text_view);
+        self.main_box.pack_start(&scroll_win, true, true, 0);
+
+        self.node_display = NodeDisplay::Text(scroll_win, text_view);
+    }
+
+    pub fn set_img(&mut self, img: gtk::Image) {
+        self.destroy();
+
+        noexpand(&img);
+        self.main_box.pack_start(&img, true, true, 0);
+
+        self.node_display = NodeDisplay::Image(img);
     }
 
     pub fn show(&self) {
         match self.node_display {
             NodeDisplay::Nothing(ref n) => n.show_all(),
-            NodeDisplay::Text(ref t) => t.show_all(),
+            NodeDisplay::Text(ref sw, _) => sw.show_all(),
             NodeDisplay::Image(ref i) => i.show_all(),
+            NodeDisplay::Audio(_) =>
+                unimplemented!("TODO: NodeDisplay::Audio"),
+        }
+    }
+
+    fn destroy(&mut self) {
+        match self.node_display {
+            NodeDisplay::Nothing(ref n) => n.destroy(),
+            NodeDisplay::Text(ref sw, _) => sw.destroy(),
+            NodeDisplay::Image(ref i) => i.destroy(),
             NodeDisplay::Audio(_) =>
                 unimplemented!("TODO: NodeDisplay::Audio"),
         }
@@ -277,7 +261,7 @@ impl TreeView {
 
         scroll_win.add(&gtk_tree_view);
 
-        main_box.pack_end(&scroll_win, true, true, 8);
+        main_box.pack_end(&scroll_win, true, true, 0);
 
         Self {
             scroll_win,
