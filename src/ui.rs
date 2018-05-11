@@ -107,11 +107,16 @@ impl Window {
                 } else {
                     return;
                 };
-                state.open_files.new_file(nx_file, &c, window_width);
+                state.open_files.new_file(nx_file, &c, &w, window_width);
 
                 println!(
                     "{}",
-                    state.open_files.get_file(0).unwrap().node_count()
+                    state
+                        .open_files
+                        .get_file(0)
+                        .unwrap()
+                        .nx_file()
+                        .node_count()
                 );
             });
         }
@@ -379,7 +384,7 @@ fn open_file(
     res
 }
 
-pub fn run_msg_dialog<W: IsA<gtk::Window>>(
+pub fn run_msg_dialog<W: gtk::IsA<gtk::Window>>(
     parent: &W,
     title: &str,
     msg: &str,

@@ -1,11 +1,14 @@
+#![allow(unknown_lints)]
+#![warn(clippy)]
 #![feature(exact_chunks)]
-#![feature(integer_atomics)]
 #![feature(nll)]
 
+mod circ_stack;
 mod err;
 mod state;
 mod ui;
 
+extern crate fxhash;
 extern crate gdk_pixbuf;
 extern crate gio;
 extern crate glib;
@@ -30,7 +33,7 @@ fn main() {
     let application = gtk::Application::new(
         "net.ims_v2.nx_edit",
         gio::ApplicationFlags::empty(),
-    ).expect("Could not initialize GTK+ application.");
+    ).expect("could not initialize GTK+ application.");
 
     application.connect_startup(move |app| {
         if let Err(e) = started(app) {

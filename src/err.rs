@@ -1,12 +1,16 @@
 use gdk_pixbuf;
 use nx;
-use std::{self, fmt};
+use std::{self, fmt, num};
 
 #[derive(Debug)]
 pub enum Error {
     Gio(String),
     Pixbuf(gdk_pixbuf::Error),
     Nx(nx::Error),
+    ParseInt(num::ParseIntError),
+    ParseFloat(num::ParseFloatError),
+    ParseVector(String),
+    LogicError(String),
 }
 
 impl fmt::Display for Error {
@@ -21,6 +25,16 @@ impl fmt::Display for Error {
                 write!(f, "{}", e)
             },
             Error::Nx(ne) => write!(f, "[nx error] {}", ne),
+            Error::ParseInt(pie) => write!(f, "[integer parse error] {}", pie),
+            Error::ParseFloat(pfe) => write!(f, "[float parse error] {}", pfe),
+            Error::ParseVector(pve) => {
+                f.write_str("[vector parse error] ")?;
+                f.write_str(pve)
+            },
+            Error::LogicError(le) => {
+                f.write_str("[logic error] ")?;
+                f.write_str(le)
+            },
         }
     }
 }
@@ -28,13 +42,29 @@ impl fmt::Display for Error {
 impl std::error::Error for Error {}
 
 impl From<nx::Error> for Error {
+    #[inline]
     fn from(nxerr: nx::Error) -> Self {
         Error::Nx(nxerr)
     }
 }
 
 impl From<gdk_pixbuf::Error> for Error {
+    #[inline]
     fn from(pixbuferr: gdk_pixbuf::Error) -> Self {
         Error::Pixbuf(pixbuferr)
+    }
+}
+
+impl From<num::ParseIntError> for Error {
+    #[inline]
+    fn from(parseerr: num::ParseIntError) -> Self {
+        Error::ParseInt(parseerr)
+    }
+}
+
+impl From<num::ParseFloatError> for Error {
+    #[inline]
+    fn from(parseerr: num::ParseFloatError) -> Self {
+        Error::ParseFloat(parseerr)
     }
 }
