@@ -1,13 +1,17 @@
 [package]
 name = "nx_edit"
+description = "a graphical user interface for viewing and editing NX files"
 version = "0.1.0"
 authors = ["Emmy Noether <intransigentms@gmail.com>"]
 repository = "https://bitbucket.org/NoetherEmmy/nx_edit"
 readme = "README.md"
 license = "AGPL-3.0-or-later"
+keywords = ["nx", "editor", "viewer", "application", "gui"]
+categories = ["gui", "visualization", "games"]
 
 [dependencies]
 fxhash = "*"
+gdk = "*"
 gdk-pixbuf = "*"
 gio = "*"
 glib = "*"
@@ -21,8 +25,10 @@ default = []
 [profile.release]
 lto = true
 panic = "abort"
-opt-level = "z"
+opt-level = 3
 debug = false
 debug-assertions = false
 rpath = false
 codegen-units = 1
+incremental = false
+overflow-checks = false

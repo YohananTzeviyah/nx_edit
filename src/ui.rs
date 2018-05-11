@@ -47,6 +47,9 @@ pub struct NodeView {
 pub struct NodeViewButtons {
     pub own_box:       gtk::Box,
     pub record_button: gtk::Button,
+    pub insert_button: gtk::Button,
+    pub insert_menu:   InsertMenu,
+    pub delete_button: gtk::Button,
     pub undo_button:   gtk::Button,
     pub redo_button:   gtk::Button,
 }
@@ -54,6 +57,29 @@ pub struct NodeViewButtons {
 pub struct TreeView {
     pub scroll_win:    gtk::ScrolledWindow,
     pub gtk_tree_view: gtk::TreeView,
+}
+
+pub struct InsertMenu {
+    pub menu:        gtk::Menu,
+    pub before_item: gtk::MenuItem,
+    pub before_menu: TypeMenu,
+    pub after_item:  gtk::MenuItem,
+    pub after_menu:  TypeMenu,
+    pub start_item:  gtk::MenuItem,
+    pub start_menu:  TypeMenu,
+    pub end_item:    gtk::MenuItem,
+    pub end_menu:    TypeMenu,
+}
+
+pub struct TypeMenu {
+    pub menu:        gtk::Menu,
+    pub empty_item:  gtk::MenuItem,
+    pub str_item:    gtk::MenuItem,
+    pub int_item:    gtk::MenuItem,
+    pub float_item:  gtk::MenuItem,
+    pub vector_item: gtk::MenuItem,
+    pub img_item:    gtk::MenuItem,
+    pub audio_item:  gtk::MenuItem,
 }
 
 impl App {
@@ -90,7 +116,7 @@ impl Window {
         let toolbar = Toolbar::new();
         gtk_window.set_titlebar(&toolbar.container);
 
-        let content = Content::new(&gtk_window);
+        let content = Arc::new(Mutex::new(Content::new(&gtk_window)));
 
         // Hook up toolbar button actions here.
         {
@@ -143,10 +169,6 @@ impl Window {
                 s.window_width = new_width;
 
                 let wrap_width = get_wrap_width(new_width);
-                //println!(
-                //    "new_width: {}, wrap_width: {}",
-                //    new_width, wrap_width
-                //);
 
                 if let Some(tv) = c.lock().unwrap().tree_view.as_ref() {
                     tv.gtk_tree_view.get_columns().iter().for_each(|col| {
@@ -172,17 +194,17 @@ impl Window {
 }
 
 impl Content {
-    pub fn new(window: &gtk::ApplicationWindow) -> Arc<Mutex<Self>> {
+    pub fn new(window: &gtk::ApplicationWindow) -> Self {
         let main_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         main_box.set_homogeneous(true);
 
         window.add(&main_box);
 
-        Arc::new(Mutex::new(Self {
+        Self {
             main_box,
             node_view: None,
             tree_view: None,
-        }))
+        }
     }
 }
 
@@ -224,7 +246,6 @@ impl NodeView {
 
         let node_display = {
             let blank_label = gtk::Label::new("");
-            //noexpand(&blank_label);
             own_box.pack_start(&blank_label, true, true, 0);
             NodeDisplay::Empty(blank_label)
         };
@@ -256,7 +277,6 @@ impl NodeView {
         self.destroy();
 
         let scroll_win = gtk::ScrolledWindow::new(None, None);
-        //noexpand(&scroll_win);
 
         let text_view = {
             let buf = gtk::TextBuffer::new(None);
@@ -274,7 +294,6 @@ impl NodeView {
     pub fn set_img(&mut self, img: gtk::Image, path: Vec<i32>) {
         self.destroy();
 
-        //noexpand(&img);
         self.own_box.pack_start(&img, true, true, 0);
 
         self.node_display = NodeDisplay::Image(img);
@@ -304,6 +323,14 @@ impl NodeViewButtons {
         let record_button = gtk::Button::new_with_label("record");
         own_box.pack_start(&record_button, true, true, 0);
 
+        let insert_button = gtk::Button::new_with_label("insert node");
+        own_box.pack_start(&insert_button, true, true, 0);
+
+        let insert_menu = InsertMenu::new();
+
+        let delete_button = gtk::Button::new_with_label("delete node");
+        own_box.pack_start(&delete_button, true, true, 0);
+
         let undo_button = gtk::Button::new_with_label("undo");
         own_box.pack_start(&undo_button, true, true, 0);
 
@@ -313,6 +340,9 @@ impl NodeViewButtons {
         Self {
             own_box,
             record_button,
+            insert_button,
+            insert_menu,
+            delete_button,
             undo_button,
             redo_button,
         }
@@ -322,7 +352,6 @@ impl NodeViewButtons {
 impl TreeView {
     pub fn new(main_box: &gtk::Box, gtk_tree_view: gtk::TreeView) -> Self {
         let scroll_win = gtk::ScrolledWindow::new(None, None);
-        //expand(&scroll_win);
 
         scroll_win.add(&gtk_tree_view);
 
@@ -331,6 +360,82 @@ impl TreeView {
         Self {
             scroll_win,
             gtk_tree_view,
+        }
+    }
+}
+
+impl InsertMenu {
+    pub fn new() -> Self {
+        let menu = gtk::Menu::new();
+
+        let before_item = gtk::MenuItem::new_with_label("before");
+        let before_menu = TypeMenu::new();
+        before_item.set_submenu(&before_menu.menu);
+        menu.append(&before_item);
+
+        let after_item = gtk::MenuItem::new_with_label("after");
+        let after_menu = TypeMenu::new();
+        after_item.set_submenu(&after_menu.menu);
+        menu.append(&after_item);
+
+        let start_item = gtk::MenuItem::new_with_label("start of level");
+        let start_menu = TypeMenu::new();
+        start_item.set_submenu(&start_menu.menu);
+        menu.append(&start_item);
+
+        let end_item = gtk::MenuItem::new_with_label("end of level");
+        let end_menu = TypeMenu::new();
+        end_item.set_submenu(&end_menu.menu);
+        menu.append(&end_item);
+
+        Self {
+            menu,
+            before_item,
+            before_menu,
+            after_item,
+            after_menu,
+            start_item,
+            start_menu,
+            end_item,
+            end_menu,
+        }
+    }
+}
+
+impl TypeMenu {
+    pub fn new() -> Self {
+        let menu = gtk::Menu::new();
+
+        let empty_item = gtk::MenuItem::new_with_label("empty");
+        menu.append(&empty_item);
+
+        let str_item = gtk::MenuItem::new_with_label("string");
+        menu.append(&str_item);
+
+        let int_item = gtk::MenuItem::new_with_label("integer");
+        menu.append(&int_item);
+
+        let float_item = gtk::MenuItem::new_with_label("float");
+        menu.append(&float_item);
+
+        let vector_item = gtk::MenuItem::new_with_label("vector");
+        menu.append(&vector_item);
+
+        let img_item = gtk::MenuItem::new_with_label("image");
+        menu.append(&img_item);
+
+        let audio_item = gtk::MenuItem::new_with_label("audio");
+        menu.append(&audio_item);
+
+        Self {
+            menu,
+            empty_item,
+            str_item,
+            int_item,
+            float_item,
+            vector_item,
+            img_item,
+            audio_item,
         }
     }
 }
@@ -427,24 +532,6 @@ pub fn run_about_dialog<
 
     Ok(())
 }
-
-/*
-pub fn noexpand<W: gtk::WidgetExt>(w: &W) {
-    w.set_property_expand(false);
-    w.set_hexpand(false);
-    w.set_hexpand_set(true);
-    w.set_vexpand(false);
-    w.set_vexpand_set(true);
-}
-
-pub fn expand<W: gtk::WidgetExt>(w: &W) {
-    w.set_property_expand(true);
-    w.set_hexpand(true);
-    w.set_hexpand_set(true);
-    w.set_vexpand(true);
-    w.set_vexpand_set(true);
-}
-*/
 
 pub fn config_text_view(t: &gtk::TextView) {
     t.set_wrap_mode(gtk::WrapMode::Word);

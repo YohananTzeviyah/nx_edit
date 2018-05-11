@@ -1,5 +1,6 @@
 use err::Error;
 use fxhash::FxHashMap as Map;
+use gdk;
 use gdk_pixbuf::{Colorspace, Pixbuf};
 use gtk::{
     self,
@@ -38,7 +39,9 @@ pub struct OpenFile {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct FileDiff {
-    modifications: Map<Vec<i32>, Vec<NodeValue>>,
+    /// `{[0, 5]: [None]}` represents the node at path `[0, 5]` having been
+    /// deleted.
+    modifications: Map<Vec<i32>, Vec<Option<NodeValue>>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -47,7 +50,7 @@ pub enum NodeValue {
     Int(i64),
     Float(f64),
     Vector(i32, i32),
-    Image(Pixbuf),
+    Img(Pixbuf),
     Audio(u8), // TODO
 }
 
@@ -59,7 +62,7 @@ pub enum NodeType {
     Int,
     Float,
     Vector,
-    Image,
+    Img,
     Audio,
 }
 
@@ -88,7 +91,7 @@ impl OpenFiles {
     ) {
         self.files
             .push(Arc::new(Mutex::new(OpenFile::new(nf, None))));
-        let of = &self.files[self.files.len() - 1];
+        let of = self.files.last().unwrap();
 
         let of_unwrapped = of.lock().unwrap();
         let root = of_unwrapped.nx_file().root();
@@ -108,7 +111,10 @@ impl OpenFiles {
         let tree_view = gtk::TreeView::new_with_model(&tree_store);
         tree_view.set_halign(gtk::Align::Center);
         tree_view.set_valign(gtk::Align::Start);
-        tree_view.set_property_expand(true);
+        tree_view.set_hexpand(true);
+        tree_view.set_vexpand(true);
+        tree_view.set_hexpand_set(true);
+        tree_view.set_vexpand_set(true);
         tree_view.set_headers_visible(false);
         tree_view.set_enable_tree_lines(true);
         tree_view.set_vscroll_policy(gtk::ScrollablePolicy::Natural);
@@ -233,18 +239,15 @@ impl OpenFiles {
                         } else {
                             return;
                         }
+
                         nv.show();
                     }
                 }
             });
         }
-        //tree_view.connect_row_activated(|_, tpath, _| {
-        //    println!("row_activated: {:?}", tpath.get_indices());
-        //});
 
         let mut c = content.lock().unwrap();
 
-        //
         let node_view_struct = NodeView::new_empty(&c.main_box);
         // Hook up NodeView buttons.
         {
@@ -320,12 +323,11 @@ impl OpenFiles {
                             if let Some(ref curr_selection) = of.curr_selection
                             {
                                 let store: gtk::TreeStore =
-                                        model.downcast()
-                                            .expect(
-                                                "failed to downcast \
-                                                 gtk::TreeModel => \
-                                                 gtk::TreeStore"
-                                            );
+                                    model.downcast()
+                                        .expect(
+                                            "failed to downcast \
+                                             gtk::TreeModel => gtk::TreeStore"
+                                        );
                                 let name = store.get_value(curr_selection, 0);
                                 let tag: u8 = ntype.into();
 
@@ -340,18 +342,75 @@ impl OpenFiles {
                                 store.remove(curr_selection);
                             }
                         },
-                        NodeDisplay::Image(ref img) => {},
-                        NodeDisplay::Audio(_) =>
-                            unimplemented!("TODO: implement Audio"),
+                        NodeDisplay::Image(_) => unimplemented!(
+                            "TODO: implement Image modifications"
+                        ),
+                        NodeDisplay::Audio(_) => unimplemented!(
+                            "TODO: implement Audio modifications"
+                        ),
                     }
                 },
             );
         }
+        {
+            let content = Arc::clone(content);
+            node_view_struct.buttons.insert_button.connect_clicked(
+                move |button| {
+                    let c = content.lock().unwrap();
+                    let nv = if let Some(ref nv) = c.node_view {
+                        nv
+                    } else {
+                        return;
+                    };
+
+                    nv.buttons.insert_menu.menu.show_all();
+                    nv.buttons.insert_menu.menu.popup_at_widget(
+                        button,
+                        gdk::Gravity::NorthWest,
+                        gdk::Gravity::SouthWest,
+                        None,
+                    );
+                },
+            );
+        }
+        /*
+        {
+            let content = Arc::clone(content);
+            node_view_struct
+                .buttons
+                .insert_menu
+                .before_item
+                .connect_select(move |imi| {
+                    let c = content.lock().unwrap();
+                    let nv = if let Some(ref nv) = c.node_view {
+                        nv
+                    } else {
+                        return;
+                    };
+
+                    nv.buttons.insert_menu.type_menu.menu.show_all();
+                    /*
+                    nv.buttons.insert_menu.type_menu.menu.popup(
+                        Some(&nv.buttons.insert_menu.menu),
+                        Some(imi),
+                        move |menu, x, y| true,
+                        0,
+                        0,
+                    );
+                    */
+                    nv.buttons.insert_menu.type_menu.menu.popup_at_widget(
+                        imi,
+                        gdk::Gravity::SouthEast,
+                        gdk::Gravity::SouthWest,
+                        None,
+                    );
+                });
+        }
+        */
 
         node_view_struct.show();
         c.node_view = Some(node_view_struct);
 
-        //
         let tree_view_struct = TreeView::new(&c.main_box, tree_view);
         tree_view_struct.scroll_win.show_all();
         c.tree_view = Some(tree_view_struct);
@@ -434,9 +493,16 @@ impl FileDiff {
         }
     }
 
-    pub fn add_modification(&mut self, path: Vec<i32>, val: NodeValue) {
+    pub fn add_modification<V: Into<Option<NodeValue>>>(
+        &mut self,
+        path: Vec<i32>,
+        val: V,
+    ) {
+        let val = val.into();
         if let Some(history) = self.modifications.get_mut(&path) {
-            history.push(val);
+            if history.last() != Some(&val) {
+                history.push(val);
+            }
         } else {
             self.modifications.insert(path, vec![val]);
         }
@@ -514,7 +580,7 @@ pub fn nx_onto_tree_store(
             )
         },
         nx::Type::Bitmap => {
-            let tag: u8 = NodeType::Image.into();
+            let tag: u8 = NodeType::Img.into();
             store.insert_with_values(parent, None, &[0, 2, 3], {
                 let bitmap = node.bitmap().unwrap();
                 let bitmap_len = bitmap.len() as usize;
@@ -669,7 +735,7 @@ pub fn parse_vector(s: &str) -> Result<(i32, i32), Error> {
                     d, i
                 )));
             },
-            ' ' => if !seen_digits_l && !digits_l.is_empty() {
+            ' ' | '\n' | '\r' => if !seen_digits_l && !digits_l.is_empty() {
                 seen_digits_l = true;
             } else if !seen_digits_r && !digits_r.is_empty() {
                 seen_digits_r = true;
