@@ -12,7 +12,10 @@ use gtk::{
 };
 use nx::{self, GenericNode};
 use pango::{EllipsizeMode, WrapMode};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::{
+    fmt,
+    sync::{Arc, Mutex, MutexGuard},
+};
 use ui::{
     get_wrap_width,
     run_msg_dialog,
@@ -29,12 +32,22 @@ pub struct AppState {
 
 pub struct OpenFiles {
     files: Vec<Arc<Mutex<OpenFile>>>,
+    icons: Arc<Icons>,
 }
 
 pub struct OpenFile {
     nx_file:        nx::File,
     curr_selection: Option<gtk::TreeIter>,
     diff:           FileDiff,
+}
+
+pub struct Icons {
+    pub str_type:    Pixbuf,
+    pub int_type:    Pixbuf,
+    pub float_type:  Pixbuf,
+    pub vector_type: Pixbuf,
+    pub img_type:    Pixbuf,
+    pub audio_type:  Pixbuf,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -79,6 +92,7 @@ impl OpenFiles {
     pub fn new() -> Self {
         Self {
             files: Vec::with_capacity(2),
+            icons: Arc::new(Icons::new(24)),
         }
     }
 
@@ -97,15 +111,17 @@ impl OpenFiles {
         let root = of_unwrapped.nx_file().root();
         let tree_store = gtk::TreeStore::new(&[
             String::static_type(),
+            Pixbuf::static_type(),
             String::static_type(),
             Pixbuf::static_type(),
             u8::static_type(),
         ]);
 
-        let root_iter = nx_onto_tree_store(&root, &tree_store, None);
+        let root_iter =
+            nx_onto_tree_store(&root, &tree_store, None, &self.icons);
 
         for n in root.iter() {
-            nx_onto_tree_store(&n, &tree_store, Some(&root_iter));
+            nx_onto_tree_store(&n, &tree_store, Some(&root_iter), &self.icons);
         }
 
         let tree_view = gtk::TreeView::new_with_model(&tree_store);
@@ -119,12 +135,14 @@ impl OpenFiles {
         tree_view.set_enable_tree_lines(true);
         tree_view.set_vscroll_policy(gtk::ScrollablePolicy::Natural);
 
-        append_text_column(&tree_view, 0, window_width);
-        append_text_column(&tree_view, 1, window_width);
-        append_pixbuf_column(&tree_view, 2);
+        append_text_column(&tree_view, 0, window_width, false);
+        append_pixbuf_column(&tree_view, 1);
+        append_text_column(&tree_view, 2, window_width, false);
+        append_pixbuf_column(&tree_view, 3);
 
         {
             let of = Arc::clone(&of);
+            let icons = Arc::clone(&self.icons);
             tree_view.connect_test_expand_row(move |tv, titer, tpath| {
                 let model_store: gtk::TreeStore = tv.get_model()
                     .clone()
@@ -161,6 +179,7 @@ impl OpenFiles {
                             &sndry_child_node,
                             &model_store,
                             Some(&immed_child_tree_iter),
+                            &icons,
                         );
                     }
 
@@ -221,17 +240,14 @@ impl OpenFiles {
                         return;
                     }
 
-                    let (_, val1, val2) = (
-                        model.get_value(&iter, 0),
-                        model.get_value(&iter, 1),
-                        model.get_value(&iter, 2),
-                    );
+                    let (text_val, img_val) =
+                        (model.get_value(&iter, 2), model.get_value(&iter, 3));
 
                     let mut c = c.lock().unwrap();
                     if let Some(ref mut nv) = c.node_view {
-                        if let Some(text) = val1.get::<&str>() {
+                        if let Some(text) = text_val.get::<&str>() {
                             nv.set_text(text, path.get_indices());
-                        } else if let Some(pixbuf) = val2.get::<Pixbuf>() {
+                        } else if let Some(pixbuf) = img_val.get::<Pixbuf>() {
                             nv.set_img(
                                 gtk::Image::new_from_pixbuf(&pixbuf),
                                 path.get_indices(),
@@ -254,6 +270,7 @@ impl OpenFiles {
             let content = Arc::clone(content);
             let of = Arc::clone(of);
             let w = window.clone();
+            let icons = Arc::clone(&self.icons);
             node_view_struct.buttons.record_button.connect_clicked(
                 move |_| {
                     let c = content.lock().unwrap();
@@ -282,7 +299,7 @@ impl OpenFiles {
                                     .get_indices();
 
                                 let ntype: u8 = model
-                                    .get_value(curr_selection, 3)
+                                    .get_value(curr_selection, 4)
                                     .get()
                                     .unwrap();
                                 let ntype: NodeType = ntype.into();
@@ -335,8 +352,13 @@ impl OpenFiles {
                                     store.insert_after(None, curr_selection);
                                 store.set(
                                     &shoehorn,
-                                    &[0, 1, 3],
-                                    &[&name, &text_content, &tag],
+                                    &[0, 1, 2, 4],
+                                    &[
+                                        &name,
+                                        &icons[ntype],
+                                        &text_content,
+                                        &tag,
+                                    ],
                                 );
 
                                 store.remove(curr_selection);
@@ -418,6 +440,64 @@ impl OpenFiles {
 
     pub fn get_file(&self, index: usize) -> Option<MutexGuard<OpenFile>> {
         self.files.get(index).map(|of| of.lock().unwrap())
+    }
+}
+
+impl Icons {
+    pub fn new(size: i32) -> Self {
+        Self {
+            str_type:    Pixbuf::new_from_file_at_size(
+                "img/str.svg",
+                size,
+                size,
+            ).unwrap(),
+            int_type:    Pixbuf::new_from_file_at_size(
+                "img/int.svg",
+                size,
+                size,
+            ).unwrap(),
+            float_type:  Pixbuf::new_from_file_at_size(
+                "img/float.svg",
+                size,
+                size,
+            ).unwrap(),
+            vector_type: Pixbuf::new_from_file_at_size(
+                "img/vector.svg",
+                size,
+                size,
+            ).unwrap(),
+            img_type:    Pixbuf::new_from_file_at_size(
+                "img/img.svg",
+                size,
+                size,
+            ).unwrap(),
+
+            audio_type: Pixbuf::new_from_file_at_size(
+                "img/audio.svg",
+                size,
+                size,
+            ).unwrap(),
+        }
+    }
+
+    pub fn get(&self, ntype: NodeType) -> Option<&Pixbuf> {
+        match ntype {
+            NodeType::Empty => None,
+            NodeType::Str => Some(&self.str_type),
+            NodeType::Int => Some(&self.int_type),
+            NodeType::Float => Some(&self.float_type),
+            NodeType::Vector => Some(&self.vector_type),
+            NodeType::Img => Some(&self.img_type),
+            NodeType::Audio => Some(&self.audio_type),
+        }
+    }
+}
+
+impl ::std::ops::Index<NodeType> for Icons {
+    type Output = Pixbuf;
+
+    fn index(&self, index: NodeType) -> &Self::Output {
+        self.get(index).unwrap()
     }
 }
 
@@ -511,6 +591,20 @@ impl FileDiff {
     }
 }
 
+impl NodeType {
+    pub fn display_str(&self) -> &'static str {
+        match self {
+            NodeType::Empty => "",
+            NodeType::Str => "<string>",
+            NodeType::Int => "<integer>",
+            NodeType::Float => "<float>",
+            NodeType::Vector => "<vector>",
+            NodeType::Img => "<image>",
+            NodeType::Audio => "<audio>",
+        }
+    }
+}
+
 impl Into<u8> for NodeType {
     #[inline]
     fn into(self) -> u8 {
@@ -525,10 +619,17 @@ impl From<u8> for NodeType {
     }
 }
 
+impl fmt::Display for NodeType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(self.display_str())
+    }
+}
+
 pub fn nx_onto_tree_store(
     node: &nx::Node,
     store: &gtk::TreeStore,
     parent: Option<&gtk::TreeIter>,
+    icons: &Icons,
 ) -> gtk::TreeIter {
     let node_name = node.name();
 
@@ -538,7 +639,7 @@ pub fn nx_onto_tree_store(
             store.insert_with_values(
                 parent,
                 None,
-                &[0, 3],
+                &[0, 4],
                 &[&node_name, &tag],
             )
         },
@@ -547,8 +648,8 @@ pub fn nx_onto_tree_store(
             store.insert_with_values(
                 parent,
                 None,
-                &[0, 1, 3],
-                &[&node_name, &node.integer().unwrap(), &tag],
+                &[0, 1, 2, 4],
+                &[&node_name, &icons.int_type, &node.integer().unwrap(), &tag],
             )
         },
         nx::Type::Float => {
@@ -556,8 +657,8 @@ pub fn nx_onto_tree_store(
             store.insert_with_values(
                 parent,
                 None,
-                &[0, 1, 3],
-                &[&node_name, &node.float().unwrap(), &tag],
+                &[0, 1, 2, 4],
+                &[&node_name, &icons.float_type, &node.float().unwrap(), &tag],
             )
         },
         nx::Type::String => {
@@ -565,8 +666,8 @@ pub fn nx_onto_tree_store(
             store.insert_with_values(
                 parent,
                 None,
-                &[0, 1, 3],
-                &[&node_name, &node.string().unwrap(), &tag],
+                &[0, 1, 2, 4],
+                &[&node_name, &icons.str_type, &node.string().unwrap(), &tag],
             )
         },
         nx::Type::Vector => {
@@ -575,13 +676,18 @@ pub fn nx_onto_tree_store(
             store.insert_with_values(
                 parent,
                 None,
-                &[0, 1, 3],
-                &[&node_name, &format!("[{}, {}]", x, y), &tag],
+                &[0, 1, 2, 4],
+                &[
+                    &node_name,
+                    &icons.vector_type,
+                    &format!("[{}, {}]", x, y),
+                    &tag,
+                ],
             )
         },
         nx::Type::Bitmap => {
             let tag: u8 = NodeType::Img.into();
-            store.insert_with_values(parent, None, &[0, 2, 3], {
+            store.insert_with_values(parent, None, &[0, 1, 3, 4], {
                 let bitmap = node.bitmap().unwrap();
                 let bitmap_len = bitmap.len() as usize;
                 let mut vec = Vec::with_capacity(bitmap_len);
@@ -598,6 +704,7 @@ pub fn nx_onto_tree_store(
 
                 &[
                     &node_name,
+                    &icons.img_type,
                     &Pixbuf::new_from_vec(
                         vec,
                         Colorspace::Rgb,
@@ -616,9 +723,10 @@ pub fn nx_onto_tree_store(
             store.insert_with_values(
                 parent,
                 None,
-                &[0, 1, 3],
+                &[0, 1, 2, 4],
                 &[
                     &node_name,
+                    &icons.audio_type,
                     &format!(
                         "[audio: {} bytes]",
                         node.audio().unwrap().data().len(),
@@ -634,6 +742,7 @@ pub fn append_text_column(
     tree: &gtk::TreeView,
     col_ix: i32,
     window_width: u32,
+    stamp: bool,
 ) {
     let column = gtk::TreeViewColumn::new();
     let cell = gtk::CellRendererText::new();
@@ -641,6 +750,11 @@ pub fn append_text_column(
     cell.set_property_ellipsize(EllipsizeMode::None);
     cell.set_property_wrap_mode(WrapMode::Word);
     cell.set_property_wrap_width(get_wrap_width(window_width));
+    if stamp {
+        cell.set_property_family(Some("monospace"));
+        cell.set_property_family_set(true);
+        cell.set_property_size_points(8.0);
+    }
 
     column.pack_start(&cell, true);
     column.add_attribute(&cell, "text", col_ix);
@@ -748,5 +862,11 @@ pub fn parse_vector(s: &str) -> Result<(i32, i32), Error> {
         }
     }
 
-    Ok((digits_l.parse()?, digits_r.parse()?))
+    if !seen_r {
+        Err(Error::ParseVector(
+            "expected trailing ']' when parsing vector".to_owned(),
+        ))
+    } else {
+        Ok((digits_l.parse()?, digits_r.parse()?))
+    }
 }

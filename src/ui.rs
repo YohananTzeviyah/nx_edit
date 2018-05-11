@@ -65,10 +65,8 @@ pub struct InsertMenu {
     pub before_menu: TypeMenu,
     pub after_item:  gtk::MenuItem,
     pub after_menu:  TypeMenu,
-    pub start_item:  gtk::MenuItem,
-    pub start_menu:  TypeMenu,
-    pub end_item:    gtk::MenuItem,
-    pub end_menu:    TypeMenu,
+    pub child_item:  gtk::MenuItem,
+    pub child_menu:  TypeMenu,
 }
 
 pub struct TypeMenu {
@@ -103,7 +101,7 @@ impl Window {
         )?);
         gtk_window.set_title("nx_edit");
         gtk_window.set_position(gtk::WindowPosition::Center);
-        gtk_window.set_default_size(800, 600);
+        gtk_window.set_default_size(1024, 576);
 
         {
             let w = gtk_window.clone();
@@ -378,15 +376,10 @@ impl InsertMenu {
         after_item.set_submenu(&after_menu.menu);
         menu.append(&after_item);
 
-        let start_item = gtk::MenuItem::new_with_label("start of level");
-        let start_menu = TypeMenu::new();
-        start_item.set_submenu(&start_menu.menu);
-        menu.append(&start_item);
-
-        let end_item = gtk::MenuItem::new_with_label("end of level");
-        let end_menu = TypeMenu::new();
-        end_item.set_submenu(&end_menu.menu);
-        menu.append(&end_item);
+        let child_item = gtk::MenuItem::new_with_label("child");
+        let child_menu = TypeMenu::new();
+        child_item.set_submenu(&child_menu.menu);
+        menu.append(&child_item);
 
         Self {
             menu,
@@ -394,10 +387,8 @@ impl InsertMenu {
             before_menu,
             after_item,
             after_menu,
-            start_item,
-            start_menu,
-            end_item,
-            end_menu,
+            child_item,
+            child_menu,
         }
     }
 }

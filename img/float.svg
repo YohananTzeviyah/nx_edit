@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   xmlns:dc="http://purl.org/dc/elements/1.1/"
+   xmlns:cc="http://creativecommons.org/ns#"
+   xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+   xmlns:svg="http://www.w3.org/2000/svg"
+   xmlns="http://www.w3.org/2000/svg"
+   width="64"
+   height="64"
+   viewBox="0 0 16.933333 16.933334"
+   version="1.1"
+   id="svg2730">
+  <defs
+     id="defs2724" />
+  <metadata
+     id="metadata2727">
+    <rdf:RDF>
+      <cc:Work
+         rdf:about="">
+        <dc:format>image/svg+xml</dc:format>
+        <dc:type
+           rdf:resource="http://purl.org/dc/dcmitype/StillImage" />
+        <dc:title></dc:title>
+        <cc:license
+           rdf:resource="http://creativecommons.org/publicdomain/zero/1.0/" />
+      </cc:Work>
+      <cc:License
+         rdf:about="http://creativecommons.org/publicdomain/zero/1.0/">
+        <cc:permits
+           rdf:resource="http://creativecommons.org/ns#Reproduction" />
+        <cc:permits
+           rdf:resource="http://creativecommons.org/ns#Distribution" />
+        <cc:permits
+           rdf:resource="http://creativecommons.org/ns#DerivativeWorks" />
+      </cc:License>
+    </rdf:RDF>
+  </metadata>
+  <g
+     id="layer1"
+     transform="matrix(0.80484092,0,0,0.80484092,1.4977234,-223.89493)">
+    <g
+       aria-label="ℝ"
+       style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:50.79999924px;line-height:1.25;font-family:'Roboto Slab';-inkscape-font-specification:'Roboto Slab';letter-spacing:0px;word-spacing:0px;fill:#a3d3cb;fill-opacity:1;stroke:none;stroke-width:0.26458332"
+       id="text3277">
+      <path
+         d="m 12.819868,292.54383 q -0.837847,-1.66467 -1.5875,-2.19383 -0.760677,-0.54019 -2.0835937,-0.54019 H 8.6526806 q 0.8488715,0.51814 1.9623264,2.73402 l 1.576476,3.11988 h 2.193836 z m -1.344965,-3.39548 q 0.584288,0.27561 1.201649,1.00321 0.628386,0.7276 1.311892,2.11667 l 2.259983,4.49791 H 11.397733 L 9.2920903,292.54383 Q 8.4762917,290.89019 7.7045903,290.35 6.9439132,289.80981 5.6209965,289.80981 H 5.4005104 v 6.95633 H 0.96873958 V 280.30686 H 8.4542431 q 2.8222219,0 4.2112849,1.1796 1.389062,1.1796 1.389062,3.56085 0,2.29305 -1.289843,3.37343 -0.540191,0.452 -1.289844,0.72761 z m -6.0743926,-7.73906 v 7.29809 h 3.5828994 q 0.2645833,0 0.5181423,-0.022 v -7.254 q -0.253559,-0.022 -0.5181423,-0.022 z m 5.2585936,0.25356 v 6.77994 q 0.71658,-0.24253 1.190625,-0.69453 0.992188,-0.94809 0.992188,-2.70095 0,-1.75287 -0.981163,-2.68993 -0.463021,-0.452 -1.20165,-0.69453 z m -8.5879339,-0.25356 v 14.25442 h 2.2269098 v -14.25442 z"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:22.57777786px;font-family:Roboto;-inkscape-font-specification:Roboto;fill:#a3d3cb;fill-opacity:1;stroke-width:0.26458332"
+         id="path3279" />
+    </g>
+  </g>
+</svg>
