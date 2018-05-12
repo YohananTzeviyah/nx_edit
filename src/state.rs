@@ -14,6 +14,7 @@ use nx::{self, GenericNode};
 use pango::{EllipsizeMode, WrapMode};
 use std::{
     fmt,
+    mem,
     sync::{Arc, Mutex, MutexGuard},
 };
 use ui::{
@@ -36,9 +37,11 @@ pub struct OpenFiles {
 }
 
 pub struct OpenFile {
-    nx_file:        nx::File,
-    curr_selection: Option<gtk::TreeIter>,
-    diff:           FileDiff,
+    nx_file:           nx::File,
+    curr_selection:    Option<gtk::TreeIter>,
+    name_buffer_dirty: bool,
+    val_buffer_dirty:  bool,
+    diff:              FileDiff,
 }
 
 pub struct Icons {
@@ -52,9 +55,42 @@ pub struct Icons {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct FileDiff {
-    /// `{[0, 5]: [None]}` represents the node at path `[0, 5]` having been
-    /// deleted.
-    modifications: Map<Vec<i32>, Vec<Option<NodeValue>>>,
+    pub modifications: Map<Vec<i32>, ChangedNode>,
+    pub history:       Vec<(Vec<i32>, NodeDiff)>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ChangedNode {
+    pub name:     Option<String>,
+    pub val:      Option<NodeValue>,
+    pub siblings: Vec<NewNode>,
+    pub children: Vec<NewNode>,
+    pub deleted:  bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct NewNode {
+    pub id:   usize,
+    pub name: String,
+    pub val:  NodeValue,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum NodeDiff {
+    NameChange(Option<String>, String),
+    ValueChange(Option<NodeValue>, NodeValue),
+    AddSibling(NewNode),
+    AddChild(NewNode),
+    Delete,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum ForwardNodeDiff {
+    NameChange(String),
+    ValueChange(NodeValue),
+    AddSibling(NewNode),
+    AddChild(NewNode),
+    Delete,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -231,22 +267,48 @@ impl OpenFiles {
                 } else {
                     return;
                 };
+
                 let model =
                     tv.get_model().expect("no model for gtk::TreeView");
+
                 if let Some(iter) = model.get_iter(&path) {
                     if let Ok(mut of) = of.try_lock() {
                         of.set_curr_selection(iter.clone());
+                        of.name_buffer_dirty = false;
+                        of.val_buffer_dirty = false;
                     } else {
                         return;
                     }
 
-                    let (text_val, img_val) =
-                        (model.get_value(&iter, 2), model.get_value(&iter, 3));
+                    let (name, text_val, img_val) = (
+                        model.get_value(&iter, 0),
+                        model.get_value(&iter, 2),
+                        model.get_value(&iter, 3),
+                    );
 
                     let mut c = c.lock().unwrap();
                     if let Some(ref mut nv) = c.node_view {
+                        nv.name_display
+                            .get_buffer()
+                            .unwrap()
+                            .set_text(name.get().unwrap());
+
                         if let Some(text) = text_val.get::<&str>() {
-                            nv.set_text(text, path.get_indices());
+                            let new_text_view =
+                                nv.set_text(text, path.get_indices());
+
+                            // Monitor this new text buffer for changes.
+                            {
+                                let of = Arc::clone(&of);
+                                new_text_view
+                                    .get_buffer()
+                                    .unwrap()
+                                    .connect_changed(move |_| {
+                                        if let Ok(mut of) = of.try_lock() {
+                                            of.val_buffer_dirty = true;
+                                        }
+                                    });
+                            }
                         } else if let Some(pixbuf) = img_val.get::<Pixbuf>() {
                             nv.set_img(
                                 gtk::Image::new_from_pixbuf(&pixbuf),
@@ -265,12 +327,24 @@ impl OpenFiles {
         let mut c = content.lock().unwrap();
 
         let node_view_struct = NodeView::new_empty(&c.main_box);
+
+        // Monitor name text buffer for changes.
+        {
+            let of = Arc::clone(of);
+            node_view_struct
+                .name_display
+                .get_buffer()
+                .unwrap()
+                .connect_changed(move |_| {
+                    of.lock().unwrap().name_buffer_dirty = true;
+                });
+        }
+
         // Hook up NodeView buttons.
         {
             let content = Arc::clone(content);
             let of = Arc::clone(of);
             let w = window.clone();
-            let icons = Arc::clone(&self.icons);
             node_view_struct.buttons.record_button.connect_clicked(
                 move |_| {
                     let c = content.lock().unwrap();
@@ -282,26 +356,62 @@ impl OpenFiles {
                         return;
                     };
 
-                    match nv.node_display {
-                        NodeDisplay::Empty(_) => (),
-                        NodeDisplay::Text(_, ref text_view) => {
-                            let model = tv.gtk_tree_view.get_model().unwrap();
+                    let mut of = of.lock().unwrap();
 
-                            let mut of = of.lock().unwrap();
-                            let (model, ntype, text_content) = if let Some(
-                                ref curr_selection,
-                            ) =
-                                of.curr_selection
-                            {
-                                let path = model
-                                    .get_path(curr_selection)
-                                    .expect("curr_selection has no path")
-                                    .get_indices();
+                    let (name_edited, val_edited) =
+                        (of.name_buffer_dirty, of.val_buffer_dirty);
+                    if !name_edited && !val_edited {
+                        return;
+                    }
+                    of.name_buffer_dirty = false;
+                    of.val_buffer_dirty = false;
 
-                                let ntype: u8 = model
-                                    .get_value(curr_selection, 4)
-                                    .get()
-                                    .unwrap();
+                    let model = tv.gtk_tree_view.get_model().unwrap();
+
+                    let (path, ntype) = if let Some(ref curr_selection) =
+                        of.curr_selection
+                    {
+                        let path = model
+                            .get_path(curr_selection)
+                            .expect("curr_selection has no path")
+                            .get_indices();
+                        let ntype: u8 =
+                            model.get_value(curr_selection, 4).get().unwrap();
+
+                        (path, ntype)
+                    } else {
+                        return;
+                    };
+
+                    if name_edited && !val_edited {
+                        let name_buffer =
+                            nv.name_display.get_buffer().unwrap();
+                        let new_name = name_buffer
+                            .get_text(
+                                &name_buffer.get_start_iter(),
+                                &name_buffer.get_end_iter(),
+                                true,
+                            )
+                            .expect("TextBufferExt::get_text failed");
+
+                        if let Some(ref curr_selection) = of.curr_selection {
+                            let store: gtk::TreeStore =
+                                model.downcast()
+                                    .expect(
+                                        "failed to downcast gtk::TreeModel => \
+                                         gtk::TreeStore"
+                                    );
+
+                            store.set(curr_selection, &[0], &[&new_name]);
+                        } else {
+                            return;
+                        }
+
+                        of.record_name(path, new_name);
+                    } else if !name_edited && val_edited {
+                        match nv.node_display {
+                            NodeDisplay::Empty(_) => (),
+                            NodeDisplay::Text(_, ref text_view) => {
                                 let ntype: NodeType = ntype.into();
 
                                 let text_buffer =
@@ -314,7 +424,11 @@ impl OpenFiles {
                                     )
                                     .expect("TextBufferExt::get_text failed");
 
-                                match of.record(ntype, path, &text_content) {
+                                match of.record_val_from_str(
+                                    ntype,
+                                    path,
+                                    &text_content,
+                                ) {
                                     Ok(Some(formatted)) => {
                                         text_buffer.set_text(&formatted);
                                         text_content = formatted;
@@ -332,44 +446,104 @@ impl OpenFiles {
                                     _ => (),
                                 }
 
-                                (model, ntype, text_content)
-                            } else {
-                                return;
-                            };
+                                if let Some(ref curr_selection) =
+                                    of.curr_selection
+                                {
+                                    let store: gtk::TreeStore =
+                                        model.downcast()
+                                            .expect(
+                                                "failed to downcast \
+                                                 gtk::TreeModel => \
+                                                 gtk::TreeStore"
+                                            );
+                                    store.set(
+                                        curr_selection,
+                                        &[2],
+                                        &[&text_content],
+                                    );
+                                }
+                            },
+                            NodeDisplay::Image(_) => unimplemented!(
+                                "TODO: implement Image modifications"
+                            ),
+                            NodeDisplay::Audio(_) => unimplemented!(
+                                "TODO: implement Audio modifications"
+                            ),
+                        }
+                    } else {
+                        let name_buffer =
+                            nv.name_display.get_buffer().unwrap();
+                        let new_name = name_buffer
+                            .get_text(
+                                &name_buffer.get_start_iter(),
+                                &name_buffer.get_end_iter(),
+                                true,
+                            )
+                            .expect("TextBufferExt::get_text failed");
 
-                            if let Some(ref curr_selection) = of.curr_selection
-                            {
-                                let store: gtk::TreeStore =
-                                    model.downcast()
-                                        .expect(
-                                            "failed to downcast \
-                                             gtk::TreeModel => gtk::TreeStore"
+                        match nv.node_display {
+                            NodeDisplay::Empty(_) => (),
+                            NodeDisplay::Text(_, ref text_view) => {
+                                let ntype: NodeType = ntype.into();
+
+                                let text_buffer =
+                                    text_view.get_buffer().unwrap();
+                                let mut text_content = text_buffer
+                                    .get_text(
+                                        &text_buffer.get_start_iter(),
+                                        &text_buffer.get_end_iter(),
+                                        true,
+                                    )
+                                    .expect("TextBufferExt::get_text failed");
+
+                                match of.record_val_from_str(
+                                    ntype,
+                                    path.clone(),
+                                    &text_content,
+                                ) {
+                                    Ok(Some(formatted)) => {
+                                        text_buffer.set_text(&formatted);
+                                        text_content = formatted;
+                                    },
+                                    Err(e) => {
+                                        run_msg_dialog(
+                                            &w,
+                                            "record error",
+                                            &e.to_string(),
+                                            gtk::MessageType::Error,
                                         );
-                                let name = store.get_value(curr_selection, 0);
-                                let tag: u8 = ntype.into();
 
-                                let shoehorn =
-                                    store.insert_after(None, curr_selection);
-                                store.set(
-                                    &shoehorn,
-                                    &[0, 1, 2, 4],
-                                    &[
-                                        &name,
-                                        &icons[ntype],
-                                        &text_content,
-                                        &tag,
-                                    ],
-                                );
+                                        return;
+                                    },
+                                    _ => (),
+                                }
 
-                                store.remove(curr_selection);
-                            }
-                        },
-                        NodeDisplay::Image(_) => unimplemented!(
-                            "TODO: implement Image modifications"
-                        ),
-                        NodeDisplay::Audio(_) => unimplemented!(
-                            "TODO: implement Audio modifications"
-                        ),
+                                if let Some(ref curr_selection) =
+                                    of.curr_selection
+                                {
+                                    let store: gtk::TreeStore =
+                                        model.downcast()
+                                            .expect(
+                                                "failed to downcast \
+                                                 gtk::TreeModel => \
+                                                 gtk::TreeStore"
+                                            );
+                                    store.set(
+                                        curr_selection,
+                                        &[0, 2],
+                                        &[&new_name, &text_content],
+                                    );
+                                }
+                            },
+                            NodeDisplay::Image(_) => unimplemented!(
+                                "TODO: implement Image modifications"
+                            ),
+                            NodeDisplay::Audio(_) => unimplemented!(
+                                "TODO: implement Audio modifications"
+                            ),
+                        }
+
+                        of.record_name(path, new_name);
                     }
                 },
             );
@@ -395,40 +569,6 @@ impl OpenFiles {
                 },
             );
         }
-        /*
-        {
-            let content = Arc::clone(content);
-            node_view_struct
-                .buttons
-                .insert_menu
-                .before_item
-                .connect_select(move |imi| {
-                    let c = content.lock().unwrap();
-                    let nv = if let Some(ref nv) = c.node_view {
-                        nv
-                    } else {
-                        return;
-                    };
-
-                    nv.buttons.insert_menu.type_menu.menu.show_all();
-                    /*
-                    nv.buttons.insert_menu.type_menu.menu.popup(
-                        Some(&nv.buttons.insert_menu.menu),
-                        Some(imi),
-                        move |menu, x, y| true,
-                        0,
-                        0,
-                    );
-                    */
-                    nv.buttons.insert_menu.type_menu.menu.popup_at_widget(
-                        imi,
-                        gdk::Gravity::SouthEast,
-                        gdk::Gravity::SouthWest,
-                        None,
-                    );
-                });
-        }
-        */
 
         node_view_struct.show();
         c.node_view = Some(node_view_struct);
@@ -509,6 +649,8 @@ impl OpenFile {
         Self {
             nx_file,
             curr_selection: curr_selection.into(),
+            name_buffer_dirty: false,
+            val_buffer_dirty: false,
             diff: FileDiff::new(),
         }
     }
@@ -523,19 +665,33 @@ impl OpenFile {
         self.curr_selection = Some(iter);
     }
 
-    pub fn record(
+    #[inline]
+    pub fn record_name(&mut self, path: Vec<i32>, name: String) {
+        self.diff
+            .add_modification(path, ForwardNodeDiff::NameChange(name));
+    }
+
+    pub fn record_val_from_str(
         &mut self,
         ntype: NodeType,
         path: Vec<i32>,
         string: &str,
     ) -> Result<Option<String>, Error> {
         match ntype {
-            NodeType::Str => self.diff
-                .add_modification(path, NodeValue::Str(string.to_owned())),
+            NodeType::Str => self.diff.add_modification(
+                path,
+                ForwardNodeDiff::ValueChange(NodeValue::Str(
+                    string.to_owned(),
+                )),
+            ),
             NodeType::Int => {
                 let trimmed = string.trim();
-                self.diff
-                    .add_modification(path, NodeValue::Int(trimmed.parse()?));
+                self.diff.add_modification(
+                    path,
+                    ForwardNodeDiff::ValueChange(
+                        NodeValue::Int(trimmed.parse()?),
+                    ),
+                );
                 if trimmed != string {
                     return Ok(Some(trimmed.to_owned()));
                 }
@@ -544,7 +700,9 @@ impl OpenFile {
                 let trimmed = string.trim();
                 self.diff.add_modification(
                     path,
-                    NodeValue::Float(trimmed.parse()?),
+                    ForwardNodeDiff::ValueChange(
+                        NodeValue::Float(trimmed.parse()?),
+                    ),
                 );
                 if trimmed != string {
                     return Ok(Some(trimmed.to_owned()));
@@ -552,7 +710,10 @@ impl OpenFile {
             },
             NodeType::Vector => {
                 let (x, y) = parse_vector(&string)?;
-                self.diff.add_modification(path, NodeValue::Vector(x, y));
+                self.diff.add_modification(
+                    path,
+                    ForwardNodeDiff::ValueChange(NodeValue::Vector(x, y)),
+                );
                 return Ok(Some(format!("[{}, {}]", x, y)));
             },
             nt =>
@@ -570,24 +731,158 @@ impl FileDiff {
     pub fn new() -> Self {
         Self {
             modifications: Map::default(),
+            history:       Vec::new(),
         }
     }
 
-    pub fn add_modification<V: Into<Option<NodeValue>>>(
-        &mut self,
-        path: Vec<i32>,
-        val: V,
-    ) {
-        let val = val.into();
-        if let Some(history) = self.modifications.get_mut(&path) {
-            if history.last() != Some(&val) {
-                history.push(val);
-            }
-        } else {
-            self.modifications.insert(path, vec![val]);
-        }
+    pub fn add_modification(&mut self, path: Vec<i32>, diff: ForwardNodeDiff) {
+        let full_diff = match diff {
+            ForwardNodeDiff::AddChild(child) => {
+                if let Some(path_state) = self.modifications.get_mut(&path) {
+                    path_state.children.push(child.clone());
+                } else {
+                    self.modifications.insert(
+                        path.clone(),
+                        ChangedNode::new().with_child(child.clone()),
+                    );
+                }
 
-        println!("FileDiff::add_modification: {:?}", self.modifications);
+                NodeDiff::AddChild(child)
+            },
+            ForwardNodeDiff::AddSibling(sibling) => {
+                if let Some(path_state) = self.modifications.get_mut(&path) {
+                    path_state.siblings.push(sibling.clone());
+                } else {
+                    self.modifications.insert(
+                        path.clone(),
+                        ChangedNode::new().with_sibling(sibling.clone()),
+                    );
+                }
+
+                NodeDiff::AddSibling(sibling)
+            },
+            ForwardNodeDiff::Delete => {
+                if let Some(path_state) = self.modifications.get_mut(&path) {
+                    path_state.delete();
+                } else {
+                    self.modifications
+                        .insert(path.clone(), ChangedNode::new().deleted());
+                }
+
+                NodeDiff::Delete
+            },
+            ForwardNodeDiff::NameChange(new_name) => {
+                let old_name = if let Some(path_state) =
+                    self.modifications.get_mut(&path)
+                {
+                    path_state.set_name(new_name.clone())
+                } else {
+                    self.modifications.insert(
+                        path.clone(),
+                        ChangedNode::new().with_name(new_name.clone()),
+                    );
+
+                    None
+                };
+
+                NodeDiff::NameChange(old_name, new_name)
+            },
+            ForwardNodeDiff::ValueChange(new_val) => {
+                let old_val = if let Some(path_state) =
+                    self.modifications.get_mut(&path)
+                {
+                    path_state.set_val(new_val.clone())
+                } else {
+                    self.modifications.insert(
+                        path.clone(),
+                        ChangedNode::new().with_val(new_val.clone()),
+                    );
+
+                    None
+                };
+
+                NodeDiff::ValueChange(old_val, new_val)
+            },
+        };
+
+        self.history.push((path, full_diff));
+
+        println!(
+            "FileDiff::add_modification: {:?} | {:?}",
+            self.modifications, self.history
+        );
+    }
+}
+
+impl ChangedNode {
+    pub fn new() -> Self {
+        Self {
+            name:     None,
+            val:      None,
+            children: Vec::new(),
+            siblings: Vec::new(),
+            deleted:  false,
+        }
+    }
+
+    #[inline]
+    pub fn with_name(self, name: String) -> Self {
+        Self {
+            name: Some(name),
+            ..self
+        }
+    }
+
+    #[inline]
+    pub fn with_val(self, val: NodeValue) -> Self {
+        Self {
+            val: Some(val),
+            ..self
+        }
+    }
+
+    #[inline]
+    pub fn with_child(self, child: NewNode) -> Self {
+        Self {
+            children: vec![child],
+            ..self
+        }
+    }
+
+    #[inline]
+    pub fn with_sibling(self, sibling: NewNode) -> Self {
+        Self {
+            siblings: vec![sibling],
+            ..self
+        }
+    }
+
+    #[inline]
+    pub fn deleted(self) -> Self {
+        Self {
+            deleted: true,
+            ..self
+        }
+    }
+
+    #[inline]
+    pub fn delete(&mut self) {
+        self.deleted = true;
+    }
+
+    #[inline]
+    pub fn undelete(&mut self) {
+        self.deleted = false;
+    }
+
+    #[inline]
+    pub fn set_name(&mut self, name: String) -> Option<String> {
+        self.name.as_mut().map(move |n| mem::replace(n, name))
+    }
+
+    #[inline]
+    pub fn set_val(&mut self, val: NodeValue) -> Option<NodeValue> {
+        self.val.as_mut().map(move |v| mem::replace(v, val))
     }
 }
 
@@ -620,6 +915,7 @@ impl From<u8> for NodeType {
 }
 
 impl fmt::Display for NodeType {
+    #[inline]
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str(self.display_str())
     }

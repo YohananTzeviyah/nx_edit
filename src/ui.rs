@@ -39,6 +39,7 @@ pub enum NodeDisplay {
 
 pub struct NodeView {
     pub own_box:      gtk::Box,
+    pub name_display: gtk::TextView,
     pub node_display: NodeDisplay,
     pub assoc_path:   Option<Vec<i32>>,
     pub buttons:      NodeViewButtons,
@@ -242,6 +243,11 @@ impl NodeView {
         let own_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
         own_box.set_homogeneous(false);
 
+        let name_display =
+            gtk::TextView::new_with_buffer(&gtk::TextBuffer::new(None));
+        config_text_view(&name_display);
+        own_box.pack_start(&name_display, false, false, 4);
+
         let node_display = {
             let blank_label = gtk::Label::new("");
             own_box.pack_start(&blank_label, true, true, 0);
@@ -255,6 +261,7 @@ impl NodeView {
 
         Self {
             own_box,
+            name_display,
             node_display,
             assoc_path: None,
             buttons,
@@ -271,7 +278,7 @@ impl NodeView {
         self.assoc_path = None;
     }
 
-    pub fn set_text(&mut self, text: &str, path: Vec<i32>) {
+    pub fn set_text(&mut self, text: &str, path: Vec<i32>) -> &gtk::TextView {
         self.destroy();
 
         let scroll_win = gtk::ScrolledWindow::new(None, None);
@@ -287,6 +294,11 @@ impl NodeView {
 
         self.node_display = NodeDisplay::Text(scroll_win, text_view);
         self.assoc_path = Some(path);
+
+        match self.node_display {
+            NodeDisplay::Text(_, ref tv) => tv,
+            _ => unreachable!(),
+        }
     }
 
     pub fn set_img(&mut self, img: gtk::Image, path: Vec<i32>) {
@@ -444,6 +456,7 @@ fn open_file(
         ],
     );
     let file_filter = gtk::FileFilter::new();
+    FileFilterExt::set_name(&file_filter, "NX files");
     file_filter.add_pattern("*.nx");
     file_dialog.add_filter(&file_filter);
 
