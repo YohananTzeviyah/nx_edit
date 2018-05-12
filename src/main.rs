@@ -3,7 +3,6 @@
 #![feature(exact_chunks)]
 #![feature(nll)]
 
-mod circ_stack;
 mod err;
 mod state;
 mod ui;
