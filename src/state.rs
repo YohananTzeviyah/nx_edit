@@ -363,8 +363,6 @@ impl OpenFiles {
                     if !name_edited && !val_edited {
                         return;
                     }
-                    of.name_buffer_dirty = false;
-                    of.val_buffer_dirty = false;
 
                     let model = tv.gtk_tree_view.get_model().unwrap();
 
@@ -384,6 +382,8 @@ impl OpenFiles {
                     };
 
                     if name_edited && !val_edited {
+                        of.name_buffer_dirty = false;
+
                         let name_buffer =
                             nv.name_display.get_buffer().unwrap();
                         let new_name = name_buffer
@@ -410,7 +410,8 @@ impl OpenFiles {
                         of.record_name(path, new_name);
                     } else if !name_edited && val_edited {
                         match nv.node_display {
-                            NodeDisplay::Empty(_) => (),
+                            NodeDisplay::Empty(_) =>
+                                of.val_buffer_dirty = false,
                             NodeDisplay::Text(_, ref text_view) => {
                                 let ntype: NodeType = ntype.into();
 
@@ -445,6 +446,8 @@ impl OpenFiles {
                                     },
                                     _ => (),
                                 }
+
+                                of.val_buffer_dirty = false;
 
                                 if let Some(ref curr_selection) =
                                     of.curr_selection
@@ -482,7 +485,8 @@ impl OpenFiles {
                             .expect("TextBufferExt::get_text failed");
 
                         match nv.node_display {
-                            NodeDisplay::Empty(_) => (),
+                            NodeDisplay::Empty(_) =>
+                                of.val_buffer_dirty = false,
                             NodeDisplay::Text(_, ref text_view) => {
                                 let ntype: NodeType = ntype.into();
 
@@ -518,6 +522,8 @@ impl OpenFiles {
                                     _ => (),
                                 }
 
+                                of.val_buffer_dirty = false;
+
                                 if let Some(ref curr_selection) =
                                     of.curr_selection
                                 {
@@ -544,6 +550,7 @@ impl OpenFiles {
                         }
 
                         of.record_name(path, new_name);
+                        of.name_buffer_dirty = false;
                     }
                 },
             );
