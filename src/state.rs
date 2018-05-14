@@ -188,7 +188,7 @@ impl OpenFiles {
                         "failed to downcast gtk::TreeModel => gtk::TreeStore",
                     );
 
-                let immed_child_tree_iter =
+                /*let immed_child_tree_iter =
                     if let Some(ti) = model_store.iter_children(titer) {
                         if model_store.iter_has_child(&ti) {
                             // We've already got the necessary data in the
@@ -200,26 +200,39 @@ impl OpenFiles {
                     } else {
                         // No data.
                         return Inhibit(true);
-                    };
+                    };*/
 
-                let expanded_path = tpath.get_indices();
+                let mut expanded_path = tpath.get_indices();
                 let of = of.lock().unwrap();
-                let expanded_node =
+                if let Some(expanded_node) =
                     get_node_from_indices(of.nx_file().root(), &expanded_path)
-                        .expect("bad row expansion");
+                {
+                    // Actual modifications happen here.
+                    for (i, immed_child_node) in
+                        expanded_node.iter().enumerate()
+                    {
+                        expanded_path.push(i as i32);
 
-                // Actual modifications happen here.
-                for immed_child_node in expanded_node.iter() {
-                    for sndry_child_node in immed_child_node.iter() {
-                        nx_onto_tree_store(
-                            &sndry_child_node,
-                            &model_store,
-                            Some(&immed_child_tree_iter),
-                            &icons,
-                        );
+                        for (j, sndry_child_node) in
+                            immed_child_node.iter().enumerate()
+                        {
+                            expanded_path.push(j as i32);
+
+                            nx_onto_tree_store(
+                                &sndry_child_node,
+                                &model_store,
+                                Some(&immed_child_tree_iter),
+                                &icons,
+                            );
+
+                            expanded_path.pop();
+                        }
+
+                        model_store.iter_next(&immed_child_tree_iter);
+                        expanded_path.pop();
                     }
-
-                    model_store.iter_next(&immed_child_tree_iter);
+                } else {
+                    unimplemented!();
                 }
 
                 Inhibit(false)
@@ -884,11 +897,23 @@ impl ChangedNode {
 
     #[inline]
     pub fn set_name(&mut self, name: String) -> Option<String> {
+        if self.name.is_none() {
+            self.name = Some(name);
+
+            return None;
+        }
+
         self.name.as_mut().map(move |n| mem::replace(n, name))
     }
 
     #[inline]
     pub fn set_val(&mut self, val: NodeValue) -> Option<NodeValue> {
+        if self.val.is_none() {
+            self.val = Some(val);
+
+            return None;
+        }
+
         self.val.as_mut().map(move |v| mem::replace(v, val))
     }
 }
