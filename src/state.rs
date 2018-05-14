@@ -954,7 +954,7 @@ impl OpenFile {
         // ================ String data ================ \\
         for s in strings {
             let s_len = s.len();
-            let mut str_buf: Vec<u8> = Vec::with_capacity(3 + s_len);
+            let mut str_buf = Vec::with_capacity(3 + s_len);
             let mut str_cur = Cursor::new(&mut str_buf);
 
             str_cur.write_u16::<LittleEndian>(s_len as u16)?;
@@ -991,74 +991,58 @@ impl OpenFile {
         // ================ Bitmap offset table ================ \\
         for bm in bitmaps.iter() {
             out.write_u64::<LittleEndian>(bitmap_data_offset)?;
-            bitmap_data_offset += 4 + bm.len() as u64;
+            let bm_len = 4 + bm.len() as u64;
+            // We already know the data len is a multiple of 4.
+            bitmap_data_offset += bm_len + if bm_len % 8 == 0 { 0 } else { 4 };
         }
         // !!!!!!!!!!!!!!!! End bitmap offset table !!!!!!!!!!!!!!!! \\
 
         // ================ Bitmap data ================ \\
         for bm in bitmaps {
             let bm_len = bm.len();
-            let mut bm_buf: Vec<u8> = Vec::with_capacity(4 + bm_len as usize);
+            let mut bm_buf = Vec::with_capacity(8 + bm_len as usize);
             let mut bm_cur = Cursor::new(&mut bm_buf);
 
             bm_cur.write_u32::<LittleEndian>(bm_len)?;
             bm.data(&mut bm_buf[bm_cur.position() as usize..]);
+            if bm_len % 8 != 0 {
+                bm_cur.write_all(&[0u8; 4])?;
+            }
 
             out.write_all(&bm_buf)?;
         }
         offset = bitmap_data_offset;
         // !!!!!!!!!!!!!!!! End bitmap data !!!!!!!!!!!!!!!! \\
 
-        let offshoot = offset % 8; // Align audio offset table to 8 bytes.
-        if offshoot != 0 {
-            let padding_buf = [0u8; 7];
-            out.write_all(&padding_buf[..8 - offshoot as usize])?;
+        let mut audio_data_offset = offset + 8 * audios.len() as u64;
+
+        // ================ Audio offset table ================ \\
+        for a in audios.iter() {
+            out.write_u64::<LittleEndian>(audio_data_offset)?;
+            let a_len = 82 + a.data().len() as u64; // 82 bytes of WZ header.
+            audio_data_offset +=
+                a_len + if a_len % 8 == 0 { 0 } else { 8 - a_len % 8 };
         }
-        match offshoot {
-            0 => (),
-            2 => {
-                out.write_all(&[0u8; 6])?;
-                offset += 6;
-            },
-            4 => {
-                out.write_all(&[0u8; 4])?;
-                offset += 4;
-            },
-            6 => {
-                out.write_all(&[0u8; 2])?;
-                offset += 2;
-            },
-            _ => unreachable!(), // We already know we're aligned at 2 bytes.
-        }
+        // !!!!!!!!!!!!!!!! End audio offset table !!!!!!!!!!!!!!!! \\
 
-        let mut bitmap_data_offset = offset + 8 * bitmaps.len() as u64;
+        // ================ Audio data ================ \\
+        for a in audios {
+            let a_len = 82 + a.data().len() as usize;
+            let padding = if a_len % 8 == 0 { 0 } else { 8 - a_len % 8 };
+            let mut a_buf = Vec::with_capacity(a_len + padding);
+            let mut a_cur = Cursor::new(&mut a_buf);
 
-        /*// ================ Bitmap offset table ================ \\
-        for bm in bitmaps.iter() {
-            out.write_u64::<LittleEndian>(bitmap_data_offset)?;
-            let bm_len = 82 + bm.len() as u64; // 82 bytes of WZ header.
-            bitmap_data_offset +=
-                bm_len + if bm_len % 8 == 0 { 0 } else { 8 - bm_len % 8 };
-        }
-        // !!!!!!!!!!!!!!!! End bitmap offset table !!!!!!!!!!!!!!!! \\
-
-        // ================ Bitmap data ================ \\
-        for bm in bitmaps {
-            let bm_len = 82 + bm.len() as usize;
-            let padding = if bm_len % 8 == 0 { 0 } else { 8 - bm_len % 8 };
-            let mut bm_buf: Vec<u8> = Vec::with_capacity(bm_len + padding);
-            let mut bm_cur = Cursor::new(&mut bm_buf);
-
-            bm_cur.write_all(bm.header())?;
-            bm_cur.write_all(s.as_bytes())?;
-            if s_len % 2 != 0 {
-                bm_cur.write_all(&[0u8])?;
+            a_cur.write_all(a.header())?;
+            a_cur.write_all(a.data())?;
+            if padding != 0 {
+                let pad_buf = [0u8; 7];
+                a_cur.write_all(&pad_buf[0..padding])?;
             }
 
-            out.write_all(&bm_buf)?;
+            out.write_all(&a_buf)?;
         }
-        offset = bitmap_data_offset;
-        // !!!!!!!!!!!!!!!! End bitmap data !!!!!!!!!!!!!!!! \\*/
+        offset = audio_data_offset;
+        // !!!!!!!!!!!!!!!! End audio data !!!!!!!!!!!!!!!! \\
 
         Ok(())
     }
