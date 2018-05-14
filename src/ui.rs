@@ -146,7 +146,7 @@ impl Window {
                 );
 
                 /*
-                // TESTERINO
+                // Test
                 let shit = state.open_files.get_file(0).unwrap();
                 let ni = ::nx_utils::NxDepthIter::new(shit.nx_file().root());
                 for (i, n) in ni.enumerate() {
