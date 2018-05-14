@@ -1,7 +1,9 @@
+use byteorder::{LittleEndian, WriteBytesExt};
 use err::Error;
 use fxhash::FxHashMap as Map;
 use gdk;
 use gdk_pixbuf::{Colorspace, Pixbuf};
+use gio::FileExt;
 use gtk::{
     self,
     prelude::*,
@@ -11,10 +13,14 @@ use gtk::{
     WidgetExt,
 };
 use nx::{self, GenericNode};
+use nx_utils::NxDepthIter;
 use pango::{EllipsizeMode, WrapMode};
 use std::{
     fmt,
+    fs::File,
+    io::{prelude::*, Cursor},
     mem,
+    path,
     sync::{Arc, Mutex, MutexGuard},
 };
 use ui::{
@@ -55,8 +61,8 @@ pub struct Icons {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct FileDiff {
-    pub modifications: Map<Vec<i32>, ChangedNode>,
-    pub history:       Vec<(Vec<i32>, NodeDiff)>,
+    modifications: Map<Vec<i32>, ChangedNode>,
+    history:       Vec<(Vec<i32>, NodeDiff)>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -70,9 +76,11 @@ pub struct ChangedNode {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct NewNode {
-    pub id:   usize,
-    pub name: String,
-    pub val:  NodeValue,
+    pub id:       usize,
+    pub name:     String,
+    pub val:      NodeValue,
+    pub siblings: Vec<NewNode>,
+    pub children: Vec<NewNode>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -107,13 +115,13 @@ pub enum NodeValue {
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 #[repr(u8)]
 pub enum NodeType {
-    Empty,
-    Str,
-    Int,
-    Float,
-    Vector,
-    Img,
-    Audio,
+    Empty = 0u8,
+    Int = 1,
+    Float = 2,
+    Str = 3,
+    Vector = 4,
+    Img = 5,
+    Audio = 6,
 }
 
 impl AppState {
@@ -787,6 +795,169 @@ impl OpenFile {
         }
 
         Ok(None)
+    }
+
+    pub fn write_to_file(
+        &self,
+        window: &gtk::ApplicationWindow,
+    ) -> Result<Option<path::PathBuf>, Error> {
+        let file_dialog = gtk::FileChooserDialog::with_buttons(
+            Some("save as *.nx file"),
+            Some(window),
+            gtk::FileChooserAction::Save,
+            &[
+                ("save as", gtk::ResponseType::Accept),
+                ("cancel", gtk::ResponseType::Cancel),
+            ],
+        );
+        let file_filter = gtk::FileFilter::new();
+        FileFilterExt::set_name(&file_filter, "NX files");
+        file_filter.add_pattern("*.nx");
+        file_dialog.add_filter(&file_filter);
+
+        let dialog_res: gtk::ResponseType = file_dialog.run().into();
+        let res = match dialog_res {
+            gtk::ResponseType::Accept => if let Some(file) =
+                file_dialog.get_file()
+            {
+                let path = file.get_path().ok_or_else(|| {
+                    Error::Gio("gio::File has no path".to_owned())
+                })?;
+
+                if path.extension().and_then(|os| os.to_str()) == Some("nx") {
+                    let mut f = File::create(&path)?;
+                    self.write(&mut f)?;
+                    f.sync_all()?;
+
+                    Ok(Some(path))
+                } else {
+                    Err(Error::FileChooser(
+                        r#"filename doesn't match "*.nx""#.to_owned(),
+                    ))
+                }
+            } else {
+                Err(Error::FileChooser("no filename was chosen".to_owned()))
+            },
+            gtk::ResponseType::DeleteEvent => return Ok(None),
+            _ => Ok(None),
+        };
+
+        file_dialog.destroy();
+
+        res
+    }
+
+    fn write<O: Write>(&self, out: &mut O) -> Result<(), Error> {
+        let mut offset = 0u64;
+
+        // ================ Header ================ \\
+        out.write_all(b"PKG4")?;
+        offset += 4;
+
+        let dummy_offsets = [0u8; (4 + 8) * 4];
+        out.write_all(&dummy_offsets)?;
+        offset += (4 + 8) * 4;
+        // !!!!!!!!!!!!!!!! End header !!!!!!!!!!!!!!!! \\
+
+        let orig_root = self.nx_file.root();
+
+        let mut strings =
+            Vec::with_capacity(self.nx_file.node_count() as usize + 16);
+        let mut bitmaps = Vec::with_capacity(16); // TODO: Better estimates for
+        let mut audios = Vec::with_capacity(16); // these capacities.
+
+        let depth_iter = NxDepthIter::new(&orig_root);
+        let mut string_id = 0u32;
+        let mut bitmap_id = 0u32;
+        let mut audio_id = 0u32;
+
+        // ================ Node data ================ \\
+        for (i, n) in depth_iter.enumerate().map(|(i, n)| (i as u32 + 1, n)) {
+            let mut node_buf = [0u8; 20];
+            let mut node_cur = Cursor::new(node_buf.as_mut());
+
+            node_cur.write_u32::<LittleEndian>(string_id)?; // Name
+            strings.push(n.name());
+            string_id += 1;
+
+            node_cur.write_u32::<LittleEndian>(i)?; // First child ID
+
+            let child_count = n.iter().count() as u16;
+            node_cur.write_u16::<LittleEndian>(child_count)?; // Child count
+
+            // Data
+            match n.dtype() {
+                nx::Type::Empty => {
+                    node_cur.write_all(&[0u8; 10])?;
+                },
+                nx::Type::Integer => {
+                    node_cur.write_u16::<LittleEndian>(1)?;
+                    node_cur.write_i64::<LittleEndian>(n.integer().unwrap())?;
+                },
+                nx::Type::Float => {
+                    node_cur.write_u16::<LittleEndian>(2)?;
+                    node_cur.write_f64::<LittleEndian>(n.float().unwrap())?;
+                },
+                nx::Type::String => {
+                    node_cur.write_u16::<LittleEndian>(3)?;
+                    node_cur.write_u32::<LittleEndian>(string_id)?;
+                    node_cur.write_all(&[0u8; 4])?;
+
+                    strings.push(n.string().unwrap());
+                    string_id += 1;
+                },
+                nx::Type::Vector => {
+                    node_cur.write_u16::<LittleEndian>(4)?;
+                    let (x, y) = n.vector().unwrap();
+                    node_cur.write_i32::<LittleEndian>(x)?;
+                    node_cur.write_i32::<LittleEndian>(y)?;
+                },
+                nx::Type::Bitmap => {
+                    node_cur.write_u16::<LittleEndian>(5)?;
+                    node_cur.write_u32::<LittleEndian>(bitmap_id)?;
+                    let bm = n.bitmap().unwrap();
+                    node_cur.write_u16::<LittleEndian>(bm.width())?;
+                    node_cur.write_u16::<LittleEndian>(bm.height())?;
+
+                    bitmaps.push(bm);
+                    bitmap_id += 1;
+                },
+                nx::Type::Audio => {
+                    node_cur.write_u16::<LittleEndian>(6)?;
+                    node_cur.write_u32::<LittleEndian>(audio_id)?;
+                    let a = n.audio().unwrap();
+                    node_cur.write_u32::<LittleEndian>(a.data().len() as u32)?;
+
+                    audios.push(a);
+                    audio_id += 1;
+                },
+            };
+
+            out.write_all(&node_buf)?;
+            offset += 20;
+        }
+        // !!!!!!!!!!!!!!!! End node data !!!!!!!!!!!!!!!! \\
+
+        let offshoot = offset % 8; // Align string offset table to 8 bytes.
+        if offshoot != 0 {
+            out.write_all(&[0u8; 4])?; // We know it's already aligned to 4.
+        }
+
+        let mut string_data_offset = offset + 8 * strings.len() as u64;
+
+        // ================ String offset table ================ \\
+        for s in strings.iter() {
+            out.write_u64::<LittleEndian>(string_data_offset)?;
+            let s_len = s.len() as u64;
+            string_data_offset += s_len + if s_len % 2 == 0 { 0 } else { 1 };
+        }
+        // !!!!!!!!!!!!!!!! End string offset table !!!!!!!!!!!!!!!! \\
+
+        offset += 8 * strings.len() as u64;
+
+        // ================ String data ================ \\
+
+        Ok(())
     }
 }
 

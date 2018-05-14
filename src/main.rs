@@ -4,9 +4,11 @@
 #![feature(nll)]
 
 mod err;
+mod nx_utils;
 mod state;
 mod ui;
 
+extern crate byteorder;
 extern crate fxhash;
 extern crate gdk;
 extern crate gdk_pixbuf;

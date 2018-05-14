@@ -11,6 +11,8 @@ pub enum Error {
     ParseFloat(num::ParseFloatError),
     ParseVector(String),
     LogicError(String),
+    FileChooser(String),
+    Io(std::io::Error),
 }
 
 impl fmt::Display for Error {
@@ -35,6 +37,11 @@ impl fmt::Display for Error {
                 f.write_str("[logic error] ")?;
                 f.write_str(le)
             },
+            Error::FileChooser(fc) => {
+                f.write_str("[file chooser error] ")?;
+                f.write_str(fc)
+            },
+            Error::Io(io) => write!(f, "[io error] {}", io),
         }
     }
 }
@@ -66,5 +73,12 @@ impl From<num::ParseFloatError> for Error {
     #[inline]
     fn from(parseerr: num::ParseFloatError) -> Self {
         Error::ParseFloat(parseerr)
+    }
+}
+
+impl From<std::io::Error> for Error {
+    #[inline]
+    fn from(ioerr: std::io::Error) -> Self {
+        Error::Io(ioerr)
     }
 }

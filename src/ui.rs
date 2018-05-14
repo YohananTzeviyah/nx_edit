@@ -24,10 +24,11 @@ pub struct Content {
 }
 
 pub struct Toolbar {
-    pub container:    gtk::HeaderBar,
-    pub open_button:  gtk::Button,
-    pub close_button: gtk::Button,
-    pub about_button: gtk::Button,
+    pub container:      gtk::HeaderBar,
+    pub open_button:    gtk::Button,
+    pub save_as_button: gtk::Button,
+    pub close_button:   gtk::Button,
+    pub about_button:   gtk::Button,
 }
 
 pub enum NodeDisplay {
@@ -143,6 +144,30 @@ impl Window {
                         .nx_file()
                         .node_count()
                 );
+
+                /*
+                // TESTERINO
+                let shit = state.open_files.get_file(0).unwrap();
+                let ni = ::nx_utils::NxDepthIter::new(shit.nx_file().root());
+                for (i, n) in ni.enumerate() {
+                    println!("{}", n.name());
+                    if i > 300 {
+                        break;
+                    }
+                }
+                */
+            });
+        }
+        {
+            let s = Arc::clone(&state);
+            let w = gtk_window.clone();
+            toolbar.save_as_button.connect_clicked(move |_| {
+                s.lock()
+                    .unwrap()
+                    .open_files
+                    .get_file(0)
+                    .unwrap()
+                    .write_to_file(&w);
             });
         }
         {
@@ -220,6 +245,9 @@ impl Toolbar {
         }
         container.pack_start(&open_button);
 
+        let save_as_button = gtk::Button::new_with_label("save as");
+        container.pack_start(&save_as_button);
+
         let close_button = gtk::Button::new_with_label("close file");
         if let Some(c) = close_button.get_style_context() {
             c.add_class("destructive-action");
@@ -232,6 +260,7 @@ impl Toolbar {
         Self {
             container,
             open_button,
+            save_as_button,
             close_button,
             about_button,
         }
@@ -471,7 +500,7 @@ fn open_file(
                 if path.extension().and_then(|os| os.to_str()) == Some("nx") {
                     Ok(unsafe { nx::File::open(path).map(Some)? })
                 } else {
-                    eprintln!("Filename doesn't match \"*.nx\"");
+                    eprintln!(r#"filename doesn't match "*.nx""#);
                     run_msg_dialog(
                         &file_dialog,
                         "wrong file type",
@@ -520,6 +549,7 @@ pub fn run_about_dialog<
     parent: Q,
 ) -> Result<(), Error> {
     let ad = gtk::AboutDialog::new();
+
     ad.set_transient_for(parent);
     ad.set_copyright(
         "(ɔ) copyleft 2018-2019, IntransigentMS v2 Team. all rites reversed.",

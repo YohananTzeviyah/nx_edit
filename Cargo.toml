@@ -10,6 +10,7 @@ keywords = ["nx", "editor", "viewer", "application", "gui"]
 categories = ["gui", "visualization", "games"]
 
 [dependencies]
+byteorder = "*"
 fxhash = "*"
 gdk = "*"
 gdk-pixbuf = "*"
