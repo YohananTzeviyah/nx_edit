@@ -95,6 +95,7 @@ pub enum ForwardNodeDiff {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum NodeValue {
+    Empty,
     Str(String),
     Int(i64),
     Float(f64),
@@ -188,7 +189,7 @@ impl OpenFiles {
                         "failed to downcast gtk::TreeModel => gtk::TreeStore",
                     );
 
-                /*let immed_child_tree_iter =
+                let immed_child_tree_iter =
                     if let Some(ti) = model_store.iter_children(titer) {
                         if model_store.iter_has_child(&ti) {
                             // We've already got the necessary data in the
@@ -200,10 +201,11 @@ impl OpenFiles {
                     } else {
                         // No data.
                         return Inhibit(true);
-                    };*/
+                    };
 
                 let mut expanded_path = tpath.get_indices();
                 let of = of.lock().unwrap();
+                let file_diff = &of.diff;
                 if let Some(expanded_node) =
                     get_node_from_indices(of.nx_file().root(), &expanded_path)
                 {
@@ -212,18 +214,59 @@ impl OpenFiles {
                         expanded_node.iter().enumerate()
                     {
                         expanded_path.push(i as i32);
+                        //println!("{:?}", expanded_path);
+
+                        if let Some(immed_child_diff) =
+                            file_diff.get_modified(&expanded_path)
+                        {
+                            for new_child in immed_child_diff.children.iter() {
+                                new_node_onto_tree_store(
+                                    new_child,
+                                    &model_store,
+                                    Some(&immed_child_tree_iter),
+                                    &icons,
+                                );
+                            }
+                        }
 
                         for (j, sndry_child_node) in
                             immed_child_node.iter().enumerate()
                         {
                             expanded_path.push(j as i32);
+                            //println!("{:?}", expanded_path);
 
-                            nx_onto_tree_store(
-                                &sndry_child_node,
-                                &model_store,
-                                Some(&immed_child_tree_iter),
-                                &icons,
-                            );
+                            if let Some(sndry_child_diff) =
+                                file_diff.get_modified(&expanded_path)
+                            {
+                                if !sndry_child_diff.deleted {
+                                    changed_nx_onto_tree_store(
+                                        &sndry_child_node,
+                                        &model_store,
+                                        Some(&immed_child_tree_iter),
+                                        &icons,
+                                        sndry_child_diff.name.as_ref(),
+                                        sndry_child_diff.val.as_ref(),
+                                    );
+                                }
+
+                                for new_sibling in
+                                    sndry_child_diff.siblings.iter()
+                                {
+                                    new_node_onto_tree_store(
+                                        new_sibling,
+                                        &model_store,
+                                        Some(&immed_child_tree_iter),
+                                        &icons,
+                                    );
+                                }
+                            } else {
+                                nx_onto_tree_store(
+                                    &sndry_child_node,
+                                    &model_store,
+                                    Some(&immed_child_tree_iter),
+                                    &icons,
+                                );
+                            }
 
                             expanded_path.pop();
                         }
@@ -832,6 +875,10 @@ impl FileDiff {
             self.modifications, self.history
         );
     }
+
+    pub fn get_modified(&self, path: &[i32]) -> Option<&ChangedNode> {
+        self.modifications.get(path)
+    }
 }
 
 impl ChangedNode {
@@ -918,6 +965,20 @@ impl ChangedNode {
     }
 }
 
+impl NodeValue {
+    pub fn get_type(&self) -> NodeType {
+        match self {
+            NodeValue::Empty => NodeType::Empty,
+            NodeValue::Str(_) => NodeType::Str,
+            NodeValue::Int(_) => NodeType::Int,
+            NodeValue::Float(_) => NodeType::Float,
+            NodeValue::Vector(_, _) => NodeType::Vector,
+            NodeValue::Img(_) => NodeType::Img,
+            NodeValue::Audio(_) => NodeType::Audio,
+        }
+    }
+}
+
 impl NodeType {
     pub fn display_str(&self) -> &'static str {
         match self {
@@ -950,6 +1011,58 @@ impl fmt::Display for NodeType {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str(self.display_str())
+    }
+}
+
+pub fn new_node_onto_tree_store(
+    new_node: &NewNode,
+    store: &gtk::TreeStore,
+    parent: Option<&gtk::TreeIter>,
+    icons: &Icons,
+) -> gtk::TreeIter {
+    let node_name = &new_node.name;
+    let tag: u8 = new_node.val.get_type().into();
+
+    match new_node.val {
+        NodeValue::Empty =>
+            store.insert_with_values(parent, None, &[0, 4], &[node_name, &tag]),
+        NodeValue::Int(ref i) => store.insert_with_values(
+            parent,
+            None,
+            &[0, 1, 2, 4],
+            &[node_name, &icons.int_type, i, &tag],
+        ),
+        NodeValue::Float(ref f) => store.insert_with_values(
+            parent,
+            None,
+            &[0, 1, 2, 4],
+            &[node_name, &icons.float_type, f, &tag],
+        ),
+        NodeValue::Str(ref s) => store.insert_with_values(
+            parent,
+            None,
+            &[0, 1, 2, 4],
+            &[node_name, &icons.str_type, s, &tag],
+        ),
+        NodeValue::Vector(ref x, ref y) => store.insert_with_values(
+            parent,
+            None,
+            &[0, 1, 2, 4],
+            &[
+                node_name,
+                &icons.vector_type,
+                &format!("[{}, {}]", x, y),
+                &tag,
+            ],
+        ),
+        NodeValue::Img(ref i) => store.insert_with_values(
+            parent,
+            None,
+            &[0, 1, 3, 4],
+            &[node_name, &icons.img_type, i, &tag],
+        ),
+        NodeValue::Audio(_) =>
+            unimplemented!("TODO: new_node_onto_tree_store Audio"),
     }
 }
 
@@ -1058,6 +1171,186 @@ pub fn nx_onto_tree_store(
                     &format!(
                         "[audio: {} bytes]",
                         node.audio().unwrap().data().len(),
+                    ),
+                    &tag,
+                ],
+            )
+        },
+    }
+}
+
+pub fn changed_nx_onto_tree_store<S: AsRef<str>>(
+    node: &nx::Node,
+    store: &gtk::TreeStore,
+    parent: Option<&gtk::TreeIter>,
+    icons: &Icons,
+    replacement_name: Option<&S>,
+    replacement_val: Option<&NodeValue>,
+) -> gtk::TreeIter {
+    let node_name =
+        replacement_name.map_or_else(|| node.name(), |n| n.as_ref());
+
+    match node.dtype() {
+        nx::Type::Empty => {
+            let tag: u8 = NodeType::Empty.into();
+            store.insert_with_values(
+                parent,
+                None,
+                &[0, 4],
+                &[&node_name, &tag],
+            )
+        },
+        nx::Type::Integer => {
+            let tag: u8 = NodeType::Int.into();
+            store.insert_with_values(
+                parent,
+                None,
+                &[0, 1, 2, 4],
+                &[
+                    &node_name,
+                    &icons.int_type,
+                    &replacement_val.map_or_else(
+                        || node.integer().unwrap(),
+                        |r| match r {
+                            NodeValue::Int(i) => *i,
+                            _ => panic!("expected NodeValue::Int"),
+                        },
+                    ),
+                    &tag,
+                ],
+            )
+        },
+        nx::Type::Float => {
+            let tag: u8 = NodeType::Float.into();
+            store.insert_with_values(
+                parent,
+                None,
+                &[0, 1, 2, 4],
+                &[
+                    &node_name,
+                    &icons.float_type,
+                    &replacement_val.map_or_else(
+                        || node.float().unwrap(),
+                        |r| match r {
+                            NodeValue::Float(f) => *f,
+                            _ => panic!("expected NodeValue::Float"),
+                        },
+                    ),
+                    &tag,
+                ],
+            )
+        },
+        nx::Type::String => {
+            let tag: u8 = NodeType::Str.into();
+            store.insert_with_values(
+                parent,
+                None,
+                &[0, 1, 2, 4],
+                &[
+                    &node_name,
+                    &icons.str_type,
+                    &replacement_val.map_or_else(
+                        || node.string().unwrap(),
+                        |r| match r {
+                            NodeValue::Str(s) => s,
+                            _ => panic!("expected NodeValue::Str"),
+                        },
+                    ),
+                    &tag,
+                ],
+            )
+        },
+        nx::Type::Vector => {
+            let tag: u8 = NodeType::Vector.into();
+            let (x, y) = replacement_val.map_or_else(
+                || node.vector().unwrap(),
+                |r| match r {
+                    NodeValue::Vector(x, y) => (*x, *y),
+                    _ => panic!("expected NodeValue::Vector"),
+                },
+            );
+            store.insert_with_values(
+                parent,
+                None,
+                &[0, 1, 2, 4],
+                &[
+                    &node_name,
+                    &icons.vector_type,
+                    &format!("[{}, {}]", x, y),
+                    &tag,
+                ],
+            )
+        },
+        nx::Type::Bitmap => {
+            let tag: u8 = NodeType::Img.into();
+
+            if let Some(r) = replacement_val {
+                match r {
+                    NodeValue::Img(i) => store.insert_with_values(
+                        parent,
+                        None,
+                        &[0, 1, 3, 4],
+                        &[&node_name, &icons.img_type, i, &tag],
+                    ),
+                    _ => panic!("expected NodeValue::Img"),
+                }
+            } else {
+                let bitmap = node.bitmap().unwrap();
+                let bitmap_len = bitmap.len() as usize;
+                let mut vec = Vec::with_capacity(bitmap_len);
+                unsafe {
+                    vec.set_len(bitmap_len);
+                }
+                bitmap.data(&mut vec);
+
+                // Convert from BGRA8888 to RGBA8888.
+                vec.exact_chunks_mut(4).for_each(|bgra| bgra.swap(0, 2));
+
+                let (width, height) =
+                    (i32::from(bitmap.width()), i32::from(bitmap.height()));
+
+                store.insert_with_values(
+                    parent,
+                    None,
+                    &[0, 1, 3, 4],
+                    &[
+                        &node_name,
+                        &icons.img_type,
+                        &Pixbuf::new_from_vec(
+                            vec,
+                            Colorspace::Rgb,
+                            true,
+                            8,
+                            width,
+                            height,
+                            width * 4,
+                        ),
+                        &tag,
+                    ],
+                )
+            }
+        },
+        nx::Type::Audio => {
+            let tag: u8 = NodeType::Audio.into();
+            store.insert_with_values(
+                parent,
+                None,
+                &[0, 1, 2, 4],
+                &[
+                    &node_name,
+                    &icons.audio_type,
+                    &replacement_val.map_or_else(
+                        || {
+                            format!(
+                                "[audio: {} bytes]",
+                                node.audio().unwrap().data().len(),
+                            )
+                        },
+                        |_| {
+                            unimplemented!(
+                                "TODO: changed_nx_onto_tree_store Audio"
+                            )
+                        },
                     ),
                     &tag,
                 ],
