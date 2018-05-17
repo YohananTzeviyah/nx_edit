@@ -1,6 +1,6 @@
 use byteorder::{LittleEndian, WriteBytesExt};
 use err::Error;
-use fxhash::FxHashMap as Map;
+use fxhash::{FxBuildHasher, FxHashMap as Map};
 use gdk;
 use gdk_pixbuf::{Colorspace, Pixbuf};
 use gio::FileExt;
@@ -13,12 +13,13 @@ use gtk::{
     WidgetExt,
 };
 use nx::{self, GenericNode};
-use nx_utils::NxDepthIter;
+use nx_utils::NxBreadthIter;
 use pango::{EllipsizeMode, WrapMode};
 use std::{
+    collections::HashMap,
     fmt,
     fs::File,
-    io::{prelude::*, Cursor},
+    io::{prelude::*, Cursor, SeekFrom},
     mem,
     path,
     sync::{Arc, Mutex, MutexGuard},
@@ -189,7 +190,8 @@ impl OpenFiles {
             let of = Arc::clone(&of);
             let icons = Arc::clone(&self.icons);
             tree_view.connect_test_expand_row(move |tv, titer, tpath| {
-                let model_store: gtk::TreeStore = tv.get_model()
+                let model_store: gtk::TreeStore = tv
+                    .get_model()
                     .clone()
                     .expect("gtk::TreeView expected to have a gtk::TreeModel")
                     .downcast()
@@ -291,7 +293,8 @@ impl OpenFiles {
         }
 
         tree_view.connect_test_collapse_row(|tv, titer, _| {
-            let model_store: gtk::TreeStore = tv.get_model()
+            let model_store: gtk::TreeStore = tv
+                .get_model()
                 .clone()
                 .expect("gtk::TreeView expected to have a gtk::TreeModel")
                 .downcast()
@@ -759,9 +762,9 @@ impl OpenFile {
                 let trimmed = string.trim();
                 self.diff.add_modification(
                     path,
-                    ForwardNodeDiff::ValueChange(
-                        NodeValue::Int(trimmed.parse()?),
-                    ),
+                    ForwardNodeDiff::ValueChange(NodeValue::Int(
+                        trimmed.parse()?
+                    )),
                 );
                 if trimmed != string {
                     return Ok(Some(trimmed.to_owned()));
@@ -771,9 +774,9 @@ impl OpenFile {
                 let trimmed = string.trim();
                 self.diff.add_modification(
                     path,
-                    ForwardNodeDiff::ValueChange(
-                        NodeValue::Float(trimmed.parse()?),
-                    ),
+                    ForwardNodeDiff::ValueChange(NodeValue::Float(
+                        trimmed.parse()?
+                    )),
                 );
                 if trimmed != string {
                     return Ok(Some(trimmed.to_owned()));
@@ -816,7 +819,7 @@ impl OpenFile {
         file_dialog.add_filter(&file_filter);
 
         let dialog_res: gtk::ResponseType = file_dialog.run().into();
-        let res = match dialog_res {
+        match dialog_res {
             gtk::ResponseType::Accept => if let Some(file) =
                 file_dialog.get_file()
             {
@@ -824,10 +827,28 @@ impl OpenFile {
                     Error::Gio("gio::File has no path".to_owned())
                 })?;
 
+                file_dialog.destroy();
+
                 if path.extension().and_then(|os| os.to_str()) == Some("nx") {
+                    let md = gtk::MessageDialog::new(
+                        Some(window),
+                        gtk::DialogFlags::from_bits(0b11).unwrap(),
+                        gtk::MessageType::Info,
+                        gtk::ButtonsType::None,
+                        &format!(
+                            "saving to {:?}, please wait (this may take a \
+                             while)...",
+                            path
+                        ),
+                    );
+                    md.set_title("saving, please wait");
+                    md.show_now();
+
                     let mut f = File::create(&path)?;
                     self.write(&mut f)?;
                     f.sync_all()?;
+
+                    md.destroy();
 
                     Ok(Some(path))
                 } else {
@@ -839,15 +860,15 @@ impl OpenFile {
                 Err(Error::FileChooser("no filename was chosen".to_owned()))
             },
             gtk::ResponseType::DeleteEvent => return Ok(None),
-            _ => Ok(None),
-        };
+            _ => {
+                file_dialog.destroy();
 
-        file_dialog.destroy();
-
-        res
+                Ok(None)
+            },
+        }
     }
 
-    fn write<O: Write>(&self, out: &mut O) -> Result<(), Error> {
+    fn write<O: Write + Seek>(&self, out: &mut O) -> Result<(), Error> {
         // ================ Header ================ \\
         out.write_all(b"PKG4")?;
 
@@ -856,32 +877,52 @@ impl OpenFile {
         // !!!!!!!!!!!!!!!! End header !!!!!!!!!!!!!!!! \\
 
         let mut offset = 52u64;
+        let node_block_offset = offset;
+        let mut node_count = 0u32;
 
         let orig_root = self.nx_file.root();
 
         let mut strings =
-            Vec::with_capacity(self.nx_file.node_count() as usize + 16);
-        let mut bitmaps = Vec::with_capacity(16); // TODO: Better estimates for
-        let mut audios = Vec::with_capacity(16); // these capacities.
+            Vec::with_capacity(self.nx_file.string_count() as usize);
+        let mut string_id_map = HashMap::with_capacity_and_hasher(
+            self.nx_file.string_count() as usize,
+            FxBuildHasher::default(),
+        );
+        let mut bitmaps =
+            Vec::with_capacity(self.nx_file.bitmap_count() as usize);
+        let mut audios =
+            Vec::with_capacity(self.nx_file.audio_count() as usize);
 
-        let depth_iter = NxDepthIter::new(&orig_root);
+        let breadth_iter = NxBreadthIter::new(&orig_root);
+        let mut child_id = 1u32;
         let mut string_id = 0u32;
         let mut bitmap_id = 0u32;
         let mut audio_id = 0u32;
 
         // ================ Node data ================ \\
-        for (i, n) in depth_iter.enumerate().map(|(i, n)| (i as u32 + 1, n)) {
+        {
+            let n = orig_root; // First write the root node, which is not part
+                               // of the iterator.
+
             let mut node_buf = [0u8; 20];
             let mut node_cur = Cursor::new(node_buf.as_mut());
 
-            node_cur.write_u32::<LittleEndian>(string_id)?; // Name
-            strings.push(n.name());
-            string_id += 1;
+            let name = n.name();
+            let mapped_string_id =
+                string_id_map.entry(name).or_insert_with(|| {
+                    let s_id = string_id;
+                    strings.push(name);
+                    string_id += 1;
+                    s_id
+                });
+            node_cur.write_u32::<LittleEndian>(*mapped_string_id)?; // Name
 
-            node_cur.write_u32::<LittleEndian>(i)?; // First child ID
+            node_cur.write_u32::<LittleEndian>(child_id)?; // First child ID
 
-            let child_count = n.iter().count() as u16;
-            node_cur.write_u16::<LittleEndian>(child_count)?; // Child count
+            let child_count = n.iter().count();
+            child_id += child_count as u32;
+            // Child count
+            node_cur.write_u16::<LittleEndian>(child_count as u16)?;
 
             // Data
             match n.dtype() {
@@ -933,21 +974,100 @@ impl OpenFile {
 
             out.write_all(&node_buf)?;
             offset += 20;
+            node_count += 1;
+        }
+        for n in breadth_iter {
+            let mut node_buf = [0u8; 20];
+            let mut node_cur = Cursor::new(node_buf.as_mut());
+
+            let name = n.name();
+            let mapped_string_id =
+                string_id_map.entry(name).or_insert_with(|| {
+                    let s_id = string_id;
+                    strings.push(name);
+                    string_id += 1;
+                    s_id
+                });
+            node_cur.write_u32::<LittleEndian>(*mapped_string_id)?; // Name
+
+            node_cur.write_u32::<LittleEndian>(child_id)?; // First child ID
+
+            let child_count = n.iter().count();
+            child_id += child_count as u32;
+            // Child count
+            node_cur.write_u16::<LittleEndian>(child_count as u16)?;
+
+            // Data
+            match n.dtype() {
+                nx::Type::Empty => {
+                    node_cur.write_all(&[0u8; 10])?;
+                },
+                nx::Type::Integer => {
+                    node_cur.write_u16::<LittleEndian>(1)?;
+                    node_cur.write_i64::<LittleEndian>(n.integer().unwrap())?;
+                },
+                nx::Type::Float => {
+                    node_cur.write_u16::<LittleEndian>(2)?;
+                    node_cur.write_f64::<LittleEndian>(n.float().unwrap())?;
+                },
+                nx::Type::String => {
+                    node_cur.write_u16::<LittleEndian>(3)?;
+                    node_cur.write_u32::<LittleEndian>(string_id)?;
+                    node_cur.write_all(&[0u8; 4])?;
+
+                    strings.push(n.string().unwrap());
+                    string_id += 1;
+                },
+                nx::Type::Vector => {
+                    node_cur.write_u16::<LittleEndian>(4)?;
+                    let (x, y) = n.vector().unwrap();
+                    node_cur.write_i32::<LittleEndian>(x)?;
+                    node_cur.write_i32::<LittleEndian>(y)?;
+                },
+                nx::Type::Bitmap => {
+                    node_cur.write_u16::<LittleEndian>(5)?;
+                    node_cur.write_u32::<LittleEndian>(bitmap_id)?;
+                    let bm = n.bitmap().unwrap();
+                    node_cur.write_u16::<LittleEndian>(bm.width())?;
+                    node_cur.write_u16::<LittleEndian>(bm.height())?;
+
+                    bitmaps.push(bm);
+                    bitmap_id += 1;
+                },
+                nx::Type::Audio => {
+                    node_cur.write_u16::<LittleEndian>(6)?;
+                    node_cur.write_u32::<LittleEndian>(audio_id)?;
+                    let a = n.audio().unwrap();
+                    node_cur.write_u32::<LittleEndian>(a.data().len() as u32)?;
+
+                    audios.push(a);
+                    audio_id += 1;
+                },
+            };
+
+            out.write_all(&node_buf)?;
+            offset += 20;
+            node_count += 1;
         }
         // !!!!!!!!!!!!!!!! End node data !!!!!!!!!!!!!!!! \\
 
-        let offshoot = offset % 8; // Align string offset table to 8 bytes.
-        if offshoot != 0 {
+        if offset % 8 != 0 {
+            // Align string offset table to 8 bytes.
             out.write_all(&[0u8; 4])?; // We know it's already aligned to 4.
+            offset += 4;
         }
+        debug_assert_eq!(offset % 8, 0);
 
+        let string_count = strings.len() as u32;
+        let string_offset_table_offset = offset;
         let mut string_data_offset = offset + 8 * strings.len() as u64;
 
         // ================ String offset table ================ \\
         for s in strings.iter() {
             out.write_u64::<LittleEndian>(string_data_offset)?;
-            let s_len = s.len() as u64;
+            let s_len = 2 + s.len() as u64;
             string_data_offset += s_len + if s_len % 2 == 0 { 0 } else { 1 };
+            debug_assert_eq!(string_data_offset % 2, 0);
         }
         // !!!!!!!!!!!!!!!! End string offset table !!!!!!!!!!!!!!!! \\
 
@@ -963,13 +1083,15 @@ impl OpenFile {
                 str_cur.write_all(&[0u8])?;
             }
 
+            debug_assert_eq!(str_buf.len() % 2, 0);
             out.write_all(&str_buf)?;
         }
         offset = string_data_offset;
+        debug_assert_eq!(offset % 2, 0);
         // !!!!!!!!!!!!!!!! End string data !!!!!!!!!!!!!!!! \\
 
-        let offshoot = offset % 8; // Align bitmap offset table to 8 bytes.
-        match offshoot {
+        match offset % 8 {
+            // Align bitmap offset table to 8 bytes.
             0 => (),
             2 => {
                 out.write_all(&[0u8; 6])?;
@@ -985,35 +1107,45 @@ impl OpenFile {
             },
             _ => unreachable!(), // We already know we're aligned at 2 bytes.
         }
+        debug_assert_eq!(offset % 8, 0);
 
+        let bitmap_count = bitmaps.len() as u32;
+        let bitmap_offset_table_offset = offset;
         let mut bitmap_data_offset = offset + 8 * bitmaps.len() as u64;
 
         // ================ Bitmap offset table ================ \\
         for bm in bitmaps.iter() {
             out.write_u64::<LittleEndian>(bitmap_data_offset)?;
-            let bm_len = 4 + bm.len() as u64;
-            // We already know the data len is a multiple of 4.
-            bitmap_data_offset += bm_len + if bm_len % 8 == 0 { 0 } else { 4 };
+            let bm_len = 4 + bm.raw_data().len() as u64;
+            bitmap_data_offset +=
+                bm_len + if bm_len % 8 == 0 { 0 } else { 8 - bm_len % 8 };
+            debug_assert_eq!(bitmap_data_offset % 8, 0);
         }
         // !!!!!!!!!!!!!!!! End bitmap offset table !!!!!!!!!!!!!!!! \\
 
         // ================ Bitmap data ================ \\
         for bm in bitmaps {
-            let bm_len = bm.len();
-            let mut bm_buf = Vec::with_capacity(8 + bm_len as usize);
+            let bm_len = bm.raw_data().len();
+            let mut bm_buf = Vec::with_capacity(11 + bm_len);
             let mut bm_cur = Cursor::new(&mut bm_buf);
 
-            bm_cur.write_u32::<LittleEndian>(bm_len)?;
-            bm.data(&mut bm_buf[bm_cur.position() as usize..]);
-            if bm_len % 8 != 0 {
-                bm_cur.write_all(&[0u8; 4])?;
+            bm_cur.write_u32::<LittleEndian>(bm_len as u32)?;
+            bm_cur.write_all(bm.raw_data())?;
+            let bm_total_len = bm_len + 4;
+            if bm_total_len % 8 != 0 {
+                let pad_buf = [0u8; 7];
+                bm_cur.write_all(&pad_buf[0..8 - bm_total_len % 8])?;
             }
 
+            debug_assert_eq!(bm_buf.len() % 8, 0);
             out.write_all(&bm_buf)?;
         }
         offset = bitmap_data_offset;
+        debug_assert_eq!(offset % 8, 0);
         // !!!!!!!!!!!!!!!! End bitmap data !!!!!!!!!!!!!!!! \\
 
+        let audio_count = audios.len() as u32;
+        let audio_offset_table_offset = offset;
         let mut audio_data_offset = offset + 8 * audios.len() as u64;
 
         // ================ Audio offset table ================ \\
@@ -1022,6 +1154,7 @@ impl OpenFile {
             let a_len = 82 + a.data().len() as u64; // 82 bytes of WZ header.
             audio_data_offset +=
                 a_len + if a_len % 8 == 0 { 0 } else { 8 - a_len % 8 };
+            debug_assert_eq!(audio_data_offset % 8, 0);
         }
         // !!!!!!!!!!!!!!!! End audio offset table !!!!!!!!!!!!!!!! \\
 
@@ -1039,16 +1172,32 @@ impl OpenFile {
                 a_cur.write_all(&pad_buf[0..padding])?;
             }
 
+            debug_assert_eq!(a_buf.len() % 8, 0);
             out.write_all(&a_buf)?;
         }
-        offset = audio_data_offset;
+        //offset = audio_data_offset;
+        debug_assert_eq!(audio_data_offset % 8, 0);
         // !!!!!!!!!!!!!!!! End audio data !!!!!!!!!!!!!!!! \\
+
+        // ================ Rest of the header ================ \\
+        out.seek(SeekFrom::Start(4))?;
+
+        out.write_u32::<LittleEndian>(node_count)?;
+        out.write_u64::<LittleEndian>(node_block_offset)?;
+        out.write_u32::<LittleEndian>(string_count)?;
+        out.write_u64::<LittleEndian>(string_offset_table_offset)?;
+        out.write_u32::<LittleEndian>(bitmap_count)?;
+        out.write_u64::<LittleEndian>(bitmap_offset_table_offset)?;
+        out.write_u32::<LittleEndian>(audio_count)?;
+        out.write_u64::<LittleEndian>(audio_offset_table_offset)?;
+        // !!!!!!!!!!!!!!!! End rest of the header !!!!!!!!!!!!!!!! \\
 
         Ok(())
     }
 }
 
 impl FileDiff {
+    #[inline]
     pub fn new() -> Self {
         Self {
             modifications: Map::default(),
@@ -1134,12 +1283,14 @@ impl FileDiff {
         );
     }
 
+    #[inline]
     pub fn get_modified(&self, path: &[i32]) -> Option<&ChangedNode> {
         self.modifications.get(path)
     }
 }
 
 impl ChangedNode {
+    #[inline]
     pub fn new() -> Self {
         Self {
             name:     None,

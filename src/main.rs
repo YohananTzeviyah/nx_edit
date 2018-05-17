@@ -3,6 +3,7 @@
 #![feature(exact_chunks)]
 #![feature(nll)]
 
+mod compression;
 mod err;
 mod nx_utils;
 mod state;
@@ -15,6 +16,7 @@ extern crate gdk_pixbuf;
 extern crate gio;
 extern crate glib;
 extern crate gtk;
+extern crate lz4;
 extern crate nx;
 extern crate pango;
 

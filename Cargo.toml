@@ -17,7 +17,8 @@ gdk-pixbuf = "*"
 gio = "*"
 glib = "*"
 gtk = { version = "*", features = ["v3_22"] }
-nx = "*"
+lz4 = "*"
+nx = { path = "./nx-rs" }
 pango = "*"
 
 [features]

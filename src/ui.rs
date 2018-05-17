@@ -159,15 +159,19 @@ impl Window {
             });
         }
         {
-            let s = Arc::clone(&state);
+            let s = Arc::clone(state);
             let w = gtk_window.clone();
             toolbar.save_as_button.connect_clicked(move |_| {
-                s.lock()
+                if let Err(e) = s
+                    .lock()
                     .unwrap()
                     .open_files
                     .get_file(0)
                     .unwrap()
-                    .write_to_file(&w);
+                    .write_to_file(&w)
+                {
+                    eprintln!("{}", e);
+                }
             });
         }
         {

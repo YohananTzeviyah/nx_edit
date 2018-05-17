@@ -13,6 +13,7 @@ pub enum Error {
     LogicError(String),
     FileChooser(String),
     Io(std::io::Error),
+    Path(String),
 }
 
 impl fmt::Display for Error {
@@ -42,6 +43,10 @@ impl fmt::Display for Error {
                 f.write_str(fc)
             },
             Error::Io(io) => write!(f, "[io error] {}", io),
+            Error::Path(p) => {
+                f.write_str("[filepath error] ")?;
+                f.write_str(p)
+            },
         }
     }
 }
