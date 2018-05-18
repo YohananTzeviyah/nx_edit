@@ -19,7 +19,7 @@ use std::{
     collections::HashMap,
     fmt,
     fs::File,
-    io::{prelude::*, Cursor, SeekFrom},
+    io::{prelude::*, BufWriter, Cursor, SeekFrom},
     mem,
     path,
     sync::{Arc, Mutex, MutexGuard},
@@ -70,7 +70,6 @@ pub struct FileDiff {
 pub struct ChangedNode {
     pub name:     Option<String>,
     pub val:      Option<NodeValue>,
-    pub siblings: Vec<NewNode>,
     pub children: Vec<NewNode>,
     pub deleted:  bool,
 }
@@ -80,7 +79,6 @@ pub struct NewNode {
     pub id:       usize,
     pub name:     String,
     pub val:      NodeValue,
-    pub siblings: Vec<NewNode>,
     pub children: Vec<NewNode>,
 }
 
@@ -88,7 +86,6 @@ pub struct NewNode {
 pub enum NodeDiff {
     NameChange(Option<String>, String),
     ValueChange(Option<NodeValue>, NodeValue),
-    AddSibling(NewNode),
     AddChild(NewNode),
     Delete,
 }
@@ -97,7 +94,6 @@ pub enum NodeDiff {
 pub enum ForwardNodeDiff {
     NameChange(String),
     ValueChange(NodeValue),
-    AddSibling(NewNode),
     AddChild(NewNode),
     Delete,
 }
@@ -256,17 +252,6 @@ impl OpenFiles {
                                         &icons,
                                         sndry_child_diff.name.as_ref(),
                                         sndry_child_diff.val.as_ref(),
-                                    );
-                                }
-
-                                for new_sibling in
-                                    sndry_child_diff.siblings.iter()
-                                {
-                                    new_node_onto_tree_store(
-                                        new_sibling,
-                                        &model_store,
-                                        Some(&immed_child_tree_iter),
-                                        &icons,
                                     );
                                 }
                             } else {
@@ -845,8 +830,10 @@ impl OpenFile {
                     md.show_now();
 
                     let mut f = File::create(&path)?;
-                    self.write(&mut f)?;
-                    f.sync_all()?;
+                    let mut f_buf =
+                        BufWriter::with_capacity(64 * 1024, &mut f);
+                    self.write(&mut f_buf)?;
+                    f_buf.into_inner()?.sync_all()?;
 
                     md.destroy();
 
@@ -1219,18 +1206,6 @@ impl FileDiff {
 
                 NodeDiff::AddChild(child)
             },
-            ForwardNodeDiff::AddSibling(sibling) => {
-                if let Some(path_state) = self.modifications.get_mut(&path) {
-                    path_state.siblings.push(sibling.clone());
-                } else {
-                    self.modifications.insert(
-                        path.clone(),
-                        ChangedNode::new().with_sibling(sibling.clone()),
-                    );
-                }
-
-                NodeDiff::AddSibling(sibling)
-            },
             ForwardNodeDiff::Delete => {
                 if let Some(path_state) = self.modifications.get_mut(&path) {
                     path_state.delete();
@@ -1296,7 +1271,6 @@ impl ChangedNode {
             name:     None,
             val:      None,
             children: Vec::new(),
-            siblings: Vec::new(),
             deleted:  false,
         }
     }
@@ -1321,14 +1295,6 @@ impl ChangedNode {
     pub fn with_child(self, child: NewNode) -> Self {
         Self {
             children: vec![child],
-            ..self
-        }
-    }
-
-    #[inline]
-    pub fn with_sibling(self, sibling: NewNode) -> Self {
-        Self {
-            siblings: vec![sibling],
             ..self
         }
     }

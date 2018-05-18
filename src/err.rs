@@ -14,6 +14,7 @@ pub enum Error {
     FileChooser(String),
     Io(std::io::Error),
     Path(String),
+    IntoInner(String),
 }
 
 impl fmt::Display for Error {
@@ -46,6 +47,10 @@ impl fmt::Display for Error {
             Error::Path(p) => {
                 f.write_str("[filepath error] ")?;
                 f.write_str(p)
+            },
+            Error::IntoInner(ii) => {
+                f.write_str("[intoinner error] ")?;
+                f.write_str(ii)
             },
         }
     }
@@ -85,5 +90,12 @@ impl From<std::io::Error> for Error {
     #[inline]
     fn from(ioerr: std::io::Error) -> Self {
         Error::Io(ioerr)
+    }
+}
+
+impl<W> From<std::io::IntoInnerError<W>> for Error {
+    #[inline]
+    fn from(iierr: std::io::IntoInnerError<W>) -> Self {
+        Error::IntoInner(iierr.error().to_string())
     }
 }
