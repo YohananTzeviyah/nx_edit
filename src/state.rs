@@ -139,9 +139,10 @@ impl OpenFiles {
         }
     }
 
-    pub fn new_file(
+    pub fn new_file<S: AsRef<path::Path>>(
         &mut self,
         nf: nx::File,
+        filename: S,
         content: &Arc<Mutex<Content>>,
         window: &gtk::ApplicationWindow,
         window_width: u32,
@@ -184,7 +185,14 @@ impl OpenFiles {
         append_pixbuf_column(&tree_view, 3);
 
         let mut c = content.lock().unwrap();
-        let view_struct = View::new(c.notebook(), tree_view.clone());
+        let view_struct = View::new(
+            c.notebook(),
+            tree_view.clone(),
+            filename
+                .as_ref()
+                .to_str()
+                .expect("filename is not valid UTF-8"),
+        );
 
         {
             let of = Arc::clone(&of);

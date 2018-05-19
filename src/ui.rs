@@ -134,13 +134,20 @@ impl Window {
                 let window_width = state.window_width;
                 // TODO: Figure out some kind of error handling, maybe
                 // involving storing errors in `AppState`.
-                let nx_file = if let Some(nf) = open_file(&w).unwrap() {
-                    nf
-                } else {
-                    return;
-                };
+                let (nx_file, filename) =
+                    if let Some(nf) = open_file(&w).unwrap() {
+                        nf
+                    } else {
+                        return;
+                    };
 
-                state.open_files.new_file(nx_file, &c, &w, window_width);
+                state.open_files.new_file(
+                    nx_file,
+                    &filename,
+                    &c,
+                    &w,
+                    window_width,
+                );
             });
         }
         {
@@ -226,6 +233,10 @@ impl Content {
     #[inline]
     pub fn new(window: &gtk::ApplicationWindow) -> Self {
         let notebook = gtk::Notebook::new();
+        notebook.popup_enable();
+        notebook.set_group_name("files");
+        notebook.set_scrollable(true);
+        notebook.set_show_tabs(true);
 
         window.add(&notebook);
         notebook.show_all();
@@ -249,9 +260,10 @@ impl Content {
 
 impl View {
     #[inline]
-    pub fn new(
+    pub fn new<S: AsRef<str>>(
         parent_notebook: &gtk::Notebook,
         tree_view: gtk::TreeView,
+        label_text: S,
     ) -> Self {
         let main_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         main_box.set_homogeneous(true);
@@ -260,6 +272,8 @@ impl View {
         let tree_view = TreeView::new(&main_box, tree_view);
 
         parent_notebook.add(&main_box);
+        parent_notebook.set_menu_label_text(&main_box, label_text.as_ref());
+        parent_notebook.set_tab_label_text(&main_box, label_text.as_ref());
 
         Self {
             main_box,
@@ -270,8 +284,6 @@ impl View {
 
     #[inline]
     pub fn show(&self) {
-        self.node_view.show();
-        self.tree_view.scroll_win.show_all();
         self.main_box.show_all();
     }
 }
@@ -523,7 +535,7 @@ impl TypeMenu {
 
 fn open_file(
     window: &gtk::ApplicationWindow,
-) -> Result<Option<nx::File>, Error> {
+) -> Result<Option<(nx::File, ::std::path::PathBuf)>, Error> {
     let file_dialog = gtk::FileChooserDialog::with_buttons(
         Some("select an *.nx file to view/edit"),
         Some(window),
@@ -542,12 +554,14 @@ fn open_file(
     let res = match dialog_res {
         gtk::ResponseType::Accept =>
             if let Some(file) = file_dialog.get_file() {
-                let path = &file.get_path().ok_or_else(|| {
+                let path = file.get_path().ok_or_else(|| {
                     Error::Gio("gio::File has no path".to_owned())
                 })?;
 
                 if path.extension().and_then(|os| os.to_str()) == Some("nx") {
-                    Ok(unsafe { nx::File::open(path).map(Some)? })
+                    Ok(unsafe {
+                        nx::File::open(&path).map(|nf| Some((nf, path)))?
+                    })
                 } else {
                     eprintln!(r#"filename doesn't match "*.nx""#);
                     run_msg_dialog(
