@@ -18,9 +18,14 @@ pub struct Window {
 }
 
 pub struct Content {
+    notebook: gtk::Notebook,
+    views:    Vec<Arc<Mutex<View>>>,
+}
+
+pub struct View {
     pub main_box:  gtk::Box,
-    pub node_view: Option<NodeView>,
-    pub tree_view: Option<TreeView>,
+    pub node_view: NodeView,
+    pub tree_view: TreeView,
 }
 
 pub struct Toolbar {
@@ -83,6 +88,7 @@ pub struct TypeMenu {
 }
 
 impl App {
+    #[inline]
     pub fn new(application: &gtk::Application) -> Result<Self, Error> {
         let state = Arc::new(Mutex::new(AppState::new()));
         let window = Window::new(application, &state)?;
@@ -133,29 +139,8 @@ impl Window {
                 } else {
                     return;
                 };
+
                 state.open_files.new_file(nx_file, &c, &w, window_width);
-
-                println!(
-                    "{}",
-                    state
-                        .open_files
-                        .get_file(0)
-                        .unwrap()
-                        .nx_file()
-                        .node_count()
-                );
-
-                /*
-                // Test
-                let shit = state.open_files.get_file(0).unwrap();
-                let ni = ::nx_utils::NxDepthIter::new(shit.nx_file().root());
-                for (i, n) in ni.enumerate() {
-                    println!("{}", n.name());
-                    if i > 300 {
-                        break;
-                    }
-                }
-                */
             });
         }
         {
@@ -198,16 +183,32 @@ impl Window {
 
                 let wrap_width = get_wrap_width(new_width);
 
-                if let Some(tv) = c.lock().unwrap().tree_view.as_ref() {
-                    tv.gtk_tree_view.get_columns().iter().for_each(|col| {
-                        col.get_cells()
-                            .iter()
-                            .filter_map(|cell| cell.clone().downcast().ok())
-                            .for_each(|cell: gtk::CellRendererText| {
-                                cell.set_property_wrap_width(wrap_width);
-                            });
-                    });
-                }
+                let c = if let Ok(c) = c.try_lock() {
+                    c
+                } else {
+                    return false;
+                };
+                c.views.iter().filter_map(|v| v.try_lock().ok()).for_each(
+                    |v| {
+                        let tv = &v.tree_view;
+                        tv.gtk_tree_view.get_columns().iter().for_each(
+                            |col| {
+                                col.get_cells()
+                                    .iter()
+                                    .filter_map(|cell| {
+                                        cell.clone().downcast().ok()
+                                    })
+                                    .for_each(
+                                        |cell: gtk::CellRendererText| {
+                                            cell.set_property_wrap_width(
+                                                wrap_width,
+                                            );
+                                        },
+                                    );
+                            },
+                        );
+                    },
+                );
 
                 false
             });
@@ -222,17 +223,56 @@ impl Window {
 }
 
 impl Content {
+    #[inline]
     pub fn new(window: &gtk::ApplicationWindow) -> Self {
+        let notebook = gtk::Notebook::new();
+
+        window.add(&notebook);
+        notebook.show_all();
+
+        Self {
+            notebook,
+            views: Vec::with_capacity(2),
+        }
+    }
+
+    #[inline]
+    pub fn notebook(&self) -> &gtk::Notebook {
+        &self.notebook
+    }
+
+    #[inline]
+    pub fn add_view(&mut self, view: Arc<Mutex<View>>) {
+        self.views.push(view);
+    }
+}
+
+impl View {
+    #[inline]
+    pub fn new(
+        parent_notebook: &gtk::Notebook,
+        tree_view: gtk::TreeView,
+    ) -> Self {
         let main_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         main_box.set_homogeneous(true);
 
-        window.add(&main_box);
+        let node_view = NodeView::new_empty(&main_box);
+        let tree_view = TreeView::new(&main_box, tree_view);
+
+        parent_notebook.add(&main_box);
 
         Self {
             main_box,
-            node_view: None,
-            tree_view: None,
+            node_view,
+            tree_view,
         }
+    }
+
+    #[inline]
+    pub fn show(&self) {
+        self.node_view.show();
+        self.tree_view.scroll_win.show_all();
+        self.main_box.show_all();
     }
 }
 
@@ -301,6 +341,7 @@ impl NodeView {
         }
     }
 
+    #[inline]
     pub fn set_empty(&mut self) {
         self.destroy();
 
@@ -334,6 +375,7 @@ impl NodeView {
         }
     }
 
+    #[inline]
     pub fn set_img(&mut self, img: gtk::Image, path: Vec<i32>) {
         self.destroy();
 
@@ -343,10 +385,12 @@ impl NodeView {
         self.assoc_path = Some(path);
     }
 
+    #[inline]
     pub fn show(&self) {
         self.own_box.show_all();
     }
 
+    #[inline]
     fn destroy(&mut self) {
         match self.node_display {
             NodeDisplay::Empty(ref n) => n.destroy(),
@@ -393,6 +437,7 @@ impl NodeViewButtons {
 }
 
 impl TreeView {
+    #[inline]
     pub fn new(main_box: &gtk::Box, gtk_tree_view: gtk::TreeView) -> Self {
         let scroll_win = gtk::ScrolledWindow::new(None, None);
 
@@ -526,6 +571,7 @@ fn open_file(
     res
 }
 
+#[inline]
 pub fn run_msg_dialog<W: gtk::IsA<gtk::Window>>(
     parent: &W,
     title: &str,
@@ -571,6 +617,7 @@ pub fn run_about_dialog<
     Ok(())
 }
 
+#[inline]
 pub fn config_text_view(t: &gtk::TextView) {
     t.set_wrap_mode(gtk::WrapMode::Word);
     t.set_accepts_tab(false); // You have to use '\t' anyways.
@@ -581,6 +628,7 @@ pub fn config_text_view(t: &gtk::TextView) {
     t.set_monospace(true);
 }
 
+#[inline]
 pub fn get_wrap_width(window_width: u32) -> i32 {
     (if window_width < 1300 {
         if window_width < 900 {

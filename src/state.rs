@@ -1,8 +1,9 @@
 use byteorder::{LittleEndian, WriteBytesExt};
+use compression::compress_buf;
 use err::Error;
 use fxhash::{FxBuildHasher, FxHashMap as Map};
 use gdk;
-use gdk_pixbuf::{Colorspace, Pixbuf};
+use gdk_pixbuf::{Colorspace, Pixbuf, PixbufExt};
 use gio::FileExt;
 use gtk::{
     self,
@@ -13,7 +14,7 @@ use gtk::{
     WidgetExt,
 };
 use nx::{self, GenericNode};
-use nx_utils::NxBreadthIter;
+use nx_utils::NxBreadthPathIter;
 use pango::{EllipsizeMode, WrapMode};
 use std::{
     collections::HashMap,
@@ -24,14 +25,7 @@ use std::{
     path,
     sync::{Arc, Mutex, MutexGuard},
 };
-use ui::{
-    get_wrap_width,
-    run_msg_dialog,
-    Content,
-    NodeDisplay,
-    NodeView,
-    TreeView,
-};
+use ui::{get_wrap_width, run_msg_dialog, Content, NodeDisplay, View};
 
 pub struct AppState {
     pub open_files:   OpenFiles,
@@ -121,7 +115,13 @@ pub enum NodeType {
     Audio = 6,
 }
 
+pub enum Image<'a> {
+    NxBitmap(nx::bitmap::Bitmap<'a>),
+    Compressed(Vec<u8>),
+}
+
 impl AppState {
+    #[inline]
     pub fn new() -> Self {
         Self {
             open_files:   OpenFiles::new(),
@@ -131,6 +131,7 @@ impl AppState {
 }
 
 impl OpenFiles {
+    #[inline]
     pub fn new() -> Self {
         Self {
             files: Vec::with_capacity(2),
@@ -182,6 +183,9 @@ impl OpenFiles {
         append_text_column(&tree_view, 2, window_width, false);
         append_pixbuf_column(&tree_view, 3);
 
+        let mut c = content.lock().unwrap();
+        let view_struct = View::new(c.notebook(), tree_view.clone());
+
         {
             let of = Arc::clone(&of);
             let icons = Arc::clone(&self.icons);
@@ -220,7 +224,6 @@ impl OpenFiles {
                         expanded_node.iter().enumerate()
                     {
                         expanded_path.push(i as i32);
-                        //println!("{:?}", expanded_path);
 
                         if let Some(immed_child_diff) =
                             file_diff.get_modified(&expanded_path)
@@ -239,7 +242,6 @@ impl OpenFiles {
                             immed_child_node.iter().enumerate()
                         {
                             expanded_path.push(j as i32);
-                            //println!("{:?}", expanded_path);
 
                             if let Some(sndry_child_diff) =
                                 file_diff.get_modified(&expanded_path)
@@ -310,8 +312,25 @@ impl OpenFiles {
             Inhibit(false)
         });
 
+        // Monitor name text buffer for changes.
         {
-            let c = Arc::clone(&content);
+            let of = Arc::clone(of);
+            view_struct
+                .node_view
+                .name_display
+                .get_buffer()
+                .unwrap()
+                .connect_changed(move |_| {
+                    of.lock().unwrap().name_buffer_dirty = true;
+                });
+        }
+
+        let view = Arc::new(Mutex::new(view_struct));
+
+        let v = view.lock().unwrap();
+
+        {
+            let view = Arc::clone(&view);
             let of = Arc::clone(&of);
             tree_view.connect_cursor_changed(move |tv| {
                 let path = if let (Some(p), _) = tv.get_cursor() {
@@ -338,89 +357,66 @@ impl OpenFiles {
                         model.get_value(&iter, 3),
                     );
 
-                    let mut c = c.lock().unwrap();
-                    if let Some(ref mut nv) = c.node_view {
-                        nv.name_display
-                            .get_buffer()
-                            .unwrap()
-                            .set_text(name.get().unwrap());
+                    let mut v = if let Ok(v) = view.try_lock() {
+                        v
+                    } else {
+                        return;
+                    };
+                    v.node_view
+                        .name_display
+                        .get_buffer()
+                        .unwrap()
+                        .set_text(name.get().unwrap());
 
-                        if let Some(text) = text_val.get::<&str>() {
-                            let new_text_view =
-                                nv.set_text(text, path.get_indices());
+                    if let Some(text) = text_val.get::<&str>() {
+                        let new_text_view =
+                            v.node_view.set_text(text, path.get_indices());
 
-                            // Monitor this new text buffer for changes.
-                            {
-                                let of = Arc::clone(&of);
-                                new_text_view
-                                    .get_buffer()
-                                    .unwrap()
-                                    .connect_changed(move |_| {
-                                        if let Ok(mut of) = of.try_lock() {
-                                            of.val_buffer_dirty = true;
-                                        }
-                                    });
-                            }
-                        } else if let Some(pixbuf) = img_val.get::<Pixbuf>() {
-                            nv.set_img(
-                                gtk::Image::new_from_pixbuf(&pixbuf),
-                                path.get_indices(),
-                            );
-                        } else {
-                            return;
+                        // Monitor this new text buffer for changes.
+                        {
+                            let of = Arc::clone(&of);
+                            new_text_view
+                                .get_buffer()
+                                .unwrap()
+                                .connect_changed(move |_| {
+                                    if let Ok(mut of) = of.try_lock() {
+                                        of.val_buffer_dirty = true;
+                                    }
+                                });
                         }
-
-                        nv.show();
+                    } else if let Some(pixbuf) = img_val.get::<Pixbuf>() {
+                        v.node_view.set_img(
+                            gtk::Image::new_from_pixbuf(&pixbuf),
+                            path.get_indices(),
+                        );
+                    } else {
+                        return;
                     }
+
+                    v.node_view.show();
                 }
             });
         }
 
-        let mut c = content.lock().unwrap();
-
-        let node_view_struct = NodeView::new_empty(&c.main_box);
-
-        // Monitor name text buffer for changes.
-        {
-            let of = Arc::clone(of);
-            node_view_struct
-                .name_display
-                .get_buffer()
-                .unwrap()
-                .connect_changed(move |_| {
-                    of.lock().unwrap().name_buffer_dirty = true;
-                });
-        }
-
         // Hook up NodeView buttons.
         {
-            let content = Arc::clone(content);
+            let view = Arc::clone(&view);
             let of = Arc::clone(of);
             let w = window.clone();
-            node_view_struct.buttons.record_button.connect_clicked(
-                move |_| {
-                    let c = content.lock().unwrap();
-                    let (nv, tv) = if let (Some(nv), Some(tv)) =
-                        (&c.node_view, &c.tree_view)
-                    {
-                        (nv, tv)
-                    } else {
-                        return;
-                    };
+            v.node_view.buttons.record_button.connect_clicked(move |_| {
+                let v = view.lock().unwrap();
+                let mut of = of.lock().unwrap();
 
-                    let mut of = of.lock().unwrap();
+                let (name_edited, val_edited) =
+                    (of.name_buffer_dirty, of.val_buffer_dirty);
+                if !name_edited && !val_edited {
+                    return;
+                }
 
-                    let (name_edited, val_edited) =
-                        (of.name_buffer_dirty, of.val_buffer_dirty);
-                    if !name_edited && !val_edited {
-                        return;
-                    }
+                let model = v.tree_view.gtk_tree_view.get_model().unwrap();
 
-                    let model = tv.gtk_tree_view.get_model().unwrap();
-
-                    let (path, ntype) = if let Some(ref curr_selection) =
-                        of.curr_selection
-                    {
+                let (path, ntype) =
+                    if let Some(ref curr_selection) = of.curr_selection {
                         let path = model
                             .get_path(curr_selection)
                             .expect("curr_selection has no path")
@@ -433,210 +429,198 @@ impl OpenFiles {
                         return;
                     };
 
-                    if name_edited && !val_edited {
-                        of.name_buffer_dirty = false;
+                if name_edited && !val_edited {
+                    of.name_buffer_dirty = false;
 
-                        let name_buffer =
-                            nv.name_display.get_buffer().unwrap();
-                        let new_name = name_buffer
-                            .get_text(
-                                &name_buffer.get_start_iter(),
-                                &name_buffer.get_end_iter(),
-                                true,
-                            )
-                            .expect("TextBufferExt::get_text failed");
+                    let name_buffer =
+                        v.node_view.name_display.get_buffer().unwrap();
+                    let new_name = name_buffer
+                        .get_text(
+                            &name_buffer.get_start_iter(),
+                            &name_buffer.get_end_iter(),
+                            true,
+                        )
+                        .expect("TextBufferExt::get_text failed");
 
-                        if let Some(ref curr_selection) = of.curr_selection {
-                            let store: gtk::TreeStore =
-                                model.downcast()
-                                    .expect(
-                                        "failed to downcast gtk::TreeModel => \
-                                         gtk::TreeStore"
-                                    );
+                    if let Some(ref curr_selection) = of.curr_selection {
+                        let store: gtk::TreeStore = model.downcast().expect(
+                            "failed to downcast gtk::TreeModel => \
+                             gtk::TreeStore",
+                        );
 
-                            store.set(curr_selection, &[0], &[&new_name]);
-                        } else {
-                            return;
-                        }
-
-                        of.record_name(path, new_name);
-                    } else if !name_edited && val_edited {
-                        match nv.node_display {
-                            NodeDisplay::Empty(_) =>
-                                of.val_buffer_dirty = false,
-                            NodeDisplay::Text(_, ref text_view) => {
-                                let ntype: NodeType = ntype.into();
-
-                                let text_buffer =
-                                    text_view.get_buffer().unwrap();
-                                let mut text_content = text_buffer
-                                    .get_text(
-                                        &text_buffer.get_start_iter(),
-                                        &text_buffer.get_end_iter(),
-                                        true,
-                                    )
-                                    .expect("TextBufferExt::get_text failed");
-
-                                match of.record_val_from_str(
-                                    ntype,
-                                    path,
-                                    &text_content,
-                                ) {
-                                    Ok(Some(formatted)) => {
-                                        text_buffer.set_text(&formatted);
-                                        text_content = formatted;
-                                    },
-                                    Err(e) => {
-                                        run_msg_dialog(
-                                            &w,
-                                            "record error",
-                                            &e.to_string(),
-                                            gtk::MessageType::Error,
-                                        );
-
-                                        return;
-                                    },
-                                    _ => (),
-                                }
-
-                                of.val_buffer_dirty = false;
-
-                                if let Some(ref curr_selection) =
-                                    of.curr_selection
-                                {
-                                    let store: gtk::TreeStore =
-                                        model.downcast()
-                                            .expect(
-                                                "failed to downcast \
-                                                 gtk::TreeModel => \
-                                                 gtk::TreeStore"
-                                            );
-                                    store.set(
-                                        curr_selection,
-                                        &[2],
-                                        &[&text_content],
-                                    );
-                                }
-                            },
-                            NodeDisplay::Image(_) => unimplemented!(
-                                "TODO: implement Image modifications"
-                            ),
-                            NodeDisplay::Audio(_) => unimplemented!(
-                                "TODO: implement Audio modifications"
-                            ),
-                        }
-                    } else {
-                        let name_buffer =
-                            nv.name_display.get_buffer().unwrap();
-                        let new_name = name_buffer
-                            .get_text(
-                                &name_buffer.get_start_iter(),
-                                &name_buffer.get_end_iter(),
-                                true,
-                            )
-                            .expect("TextBufferExt::get_text failed");
-
-                        match nv.node_display {
-                            NodeDisplay::Empty(_) =>
-                                of.val_buffer_dirty = false,
-                            NodeDisplay::Text(_, ref text_view) => {
-                                let ntype: NodeType = ntype.into();
-
-                                let text_buffer =
-                                    text_view.get_buffer().unwrap();
-                                let mut text_content = text_buffer
-                                    .get_text(
-                                        &text_buffer.get_start_iter(),
-                                        &text_buffer.get_end_iter(),
-                                        true,
-                                    )
-                                    .expect("TextBufferExt::get_text failed");
-
-                                match of.record_val_from_str(
-                                    ntype,
-                                    path.clone(),
-                                    &text_content,
-                                ) {
-                                    Ok(Some(formatted)) => {
-                                        text_buffer.set_text(&formatted);
-                                        text_content = formatted;
-                                    },
-                                    Err(e) => {
-                                        run_msg_dialog(
-                                            &w,
-                                            "record error",
-                                            &e.to_string(),
-                                            gtk::MessageType::Error,
-                                        );
-
-                                        return;
-                                    },
-                                    _ => (),
-                                }
-
-                                of.val_buffer_dirty = false;
-
-                                if let Some(ref curr_selection) =
-                                    of.curr_selection
-                                {
-                                    let store: gtk::TreeStore =
-                                        model.downcast()
-                                            .expect(
-                                                "failed to downcast \
-                                                 gtk::TreeModel => \
-                                                 gtk::TreeStore"
-                                            );
-                                    store.set(
-                                        curr_selection,
-                                        &[0, 2],
-                                        &[&new_name, &text_content],
-                                    );
-                                }
-                            },
-                            NodeDisplay::Image(_) => unimplemented!(
-                                "TODO: implement Image modifications"
-                            ),
-                            NodeDisplay::Audio(_) => unimplemented!(
-                                "TODO: implement Audio modifications"
-                            ),
-                        }
-
-                        of.record_name(path, new_name);
-                        of.name_buffer_dirty = false;
-                    }
-                },
-            );
-        }
-        {
-            let content = Arc::clone(content);
-            node_view_struct.buttons.insert_button.connect_clicked(
-                move |button| {
-                    let c = content.lock().unwrap();
-                    let nv = if let Some(ref nv) = c.node_view {
-                        nv
+                        store.set(curr_selection, &[0], &[&new_name]);
                     } else {
                         return;
-                    };
+                    }
 
-                    nv.buttons.insert_menu.menu.show_all();
-                    nv.buttons.insert_menu.menu.popup_at_widget(
+                    of.record_name(path, new_name);
+                } else if !name_edited && val_edited {
+                    match v.node_view.node_display {
+                        NodeDisplay::Empty(_) => of.val_buffer_dirty = false,
+                        NodeDisplay::Text(_, ref text_view) => {
+                            let ntype: NodeType = ntype.into();
+
+                            let text_buffer = text_view.get_buffer().unwrap();
+                            let mut text_content = text_buffer
+                                .get_text(
+                                    &text_buffer.get_start_iter(),
+                                    &text_buffer.get_end_iter(),
+                                    true,
+                                )
+                                .expect("TextBufferExt::get_text failed");
+
+                            match of.record_val_from_str(
+                                ntype,
+                                path,
+                                &text_content,
+                            ) {
+                                Ok(Some(formatted)) => {
+                                    text_buffer.set_text(&formatted);
+                                    text_content = formatted;
+                                },
+                                Err(e) => {
+                                    run_msg_dialog(
+                                        &w,
+                                        "record error",
+                                        &e.to_string(),
+                                        gtk::MessageType::Error,
+                                    );
+
+                                    return;
+                                },
+                                _ => (),
+                            }
+
+                            of.val_buffer_dirty = false;
+
+                            if let Some(ref curr_selection) = of.curr_selection
+                            {
+                                let store: gtk::TreeStore =
+                                        model.downcast()
+                                            .expect(
+                                                "failed to downcast \
+                                                 gtk::TreeModel => \
+                                                 gtk::TreeStore"
+                                            );
+                                store.set(
+                                    curr_selection,
+                                    &[2],
+                                    &[&text_content],
+                                );
+                            }
+                        },
+                        NodeDisplay::Image(_) => unimplemented!(
+                            "TODO: implement Image modifications"
+                        ),
+                        NodeDisplay::Audio(_) => unimplemented!(
+                            "TODO: implement Audio modifications"
+                        ),
+                    }
+                } else {
+                    let name_buffer =
+                        v.node_view.name_display.get_buffer().unwrap();
+                    let new_name = name_buffer
+                        .get_text(
+                            &name_buffer.get_start_iter(),
+                            &name_buffer.get_end_iter(),
+                            true,
+                        )
+                        .expect("TextBufferExt::get_text failed");
+
+                    match v.node_view.node_display {
+                        NodeDisplay::Empty(_) => of.val_buffer_dirty = false,
+                        NodeDisplay::Text(_, ref text_view) => {
+                            let ntype: NodeType = ntype.into();
+
+                            let text_buffer = text_view.get_buffer().unwrap();
+                            let mut text_content = text_buffer
+                                .get_text(
+                                    &text_buffer.get_start_iter(),
+                                    &text_buffer.get_end_iter(),
+                                    true,
+                                )
+                                .expect("TextBufferExt::get_text failed");
+
+                            match of.record_val_from_str(
+                                ntype,
+                                path.clone(),
+                                &text_content,
+                            ) {
+                                Ok(Some(formatted)) => {
+                                    text_buffer.set_text(&formatted);
+                                    text_content = formatted;
+                                },
+                                Err(e) => {
+                                    run_msg_dialog(
+                                        &w,
+                                        "record error",
+                                        &e.to_string(),
+                                        gtk::MessageType::Error,
+                                    );
+
+                                    return;
+                                },
+                                _ => (),
+                            }
+
+                            of.val_buffer_dirty = false;
+
+                            if let Some(ref curr_selection) = of.curr_selection
+                            {
+                                let store: gtk::TreeStore =
+                                        model.downcast()
+                                            .expect(
+                                                "failed to downcast \
+                                                 gtk::TreeModel => \
+                                                 gtk::TreeStore"
+                                            );
+                                store.set(
+                                    curr_selection,
+                                    &[0, 2],
+                                    &[&new_name, &text_content],
+                                );
+                            }
+                        },
+                        NodeDisplay::Image(_) => unimplemented!(
+                            "TODO: implement Image modifications"
+                        ),
+                        NodeDisplay::Audio(_) => unimplemented!(
+                            "TODO: implement Audio modifications"
+                        ),
+                    }
+
+                    of.record_name(path, new_name);
+                    of.name_buffer_dirty = false;
+                }
+            });
+        }
+        {
+            let view = Arc::clone(&view);
+            v.node_view
+                .buttons
+                .insert_button
+                .connect_clicked(move |button| {
+                    let v = view.lock().unwrap();
+
+                    v.node_view.buttons.insert_menu.menu.show_all();
+                    v.node_view.buttons.insert_menu.menu.popup_at_widget(
                         button,
                         gdk::Gravity::NorthWest,
                         gdk::Gravity::SouthWest,
                         None,
                     );
-                },
-            );
+                });
         }
 
-        node_view_struct.show();
-        c.node_view = Some(node_view_struct);
+        v.show();
 
-        let tree_view_struct = TreeView::new(&c.main_box, tree_view);
-        tree_view_struct.scroll_win.show_all();
-        c.tree_view = Some(tree_view_struct);
+        (|_| {})(v); // I know, I'm a terrible person. I just didn't want
+                     // another level of indentation.
+
+        c.add_view(view);
     }
 
+    #[inline]
     pub fn get_file(&self, index: usize) -> Option<MutexGuard<OpenFile>> {
         self.files.get(index).map(|of| of.lock().unwrap())
     }
@@ -679,6 +663,7 @@ impl Icons {
         }
     }
 
+    #[inline]
     pub fn get(&self, ntype: NodeType) -> Option<&Pixbuf> {
         match ntype {
             NodeType::Empty => None,
@@ -695,12 +680,14 @@ impl Icons {
 impl ::std::ops::Index<NodeType> for Icons {
     type Output = Pixbuf;
 
+    #[inline]
     fn index(&self, index: NodeType) -> &Self::Output {
         self.get(index).unwrap()
     }
 }
 
 impl OpenFile {
+    #[inline]
     pub fn new<S: Into<Option<gtk::TreeIter>>>(
         nx_file: nx::File,
         curr_selection: S,
@@ -871,34 +858,44 @@ impl OpenFile {
 
         let mut strings =
             Vec::with_capacity(self.nx_file.string_count() as usize);
-        let mut string_id_map = HashMap::with_capacity_and_hasher(
-            self.nx_file.string_count() as usize,
-            FxBuildHasher::default(),
-        );
+        let mut string_id_map: HashMap<&str, _, _> =
+            HashMap::with_capacity_and_hasher(
+                self.nx_file.string_count() as usize,
+                FxBuildHasher::default(),
+            );
         let mut bitmaps =
             Vec::with_capacity(self.nx_file.bitmap_count() as usize);
         let mut audios =
             Vec::with_capacity(self.nx_file.audio_count() as usize);
 
-        let breadth_iter = NxBreadthIter::new(&orig_root);
+        let breadth_iter = NxBreadthPathIter::new(&orig_root);
         let mut child_id = 1u32;
         let mut string_id = 0u32;
         let mut bitmap_id = 0u32;
         let mut audio_id = 0u32;
 
         // ================ Node data ================ \\
-        {
+        for _ in 0..1 {
             let n = orig_root; // First write the root node, which is not part
                                // of the iterator.
+            let p = vec![0];
+
+            let modified = self.diff.modifications.get(&p);
+            if modified.map(|cn| cn.deleted).unwrap_or(false) {
+                continue;
+            }
 
             let mut node_buf = [0u8; 20];
             let mut node_cur = Cursor::new(node_buf.as_mut());
 
-            let name = n.name();
+            let name = modified
+                .and_then(|cn| cn.name())
+                .map(|name| name.as_str())
+                .unwrap_or_else(|| n.name());
             let mapped_string_id =
                 string_id_map.entry(name).or_insert_with(|| {
-                    let s_id = string_id;
                     strings.push(name);
+                    let s_id = string_id;
                     string_id += 1;
                     s_id
                 });
@@ -912,66 +909,118 @@ impl OpenFile {
             node_cur.write_u16::<LittleEndian>(child_count as u16)?;
 
             // Data
-            match n.dtype() {
-                nx::Type::Empty => {
-                    node_cur.write_all(&[0u8; 10])?;
-                },
-                nx::Type::Integer => {
-                    node_cur.write_u16::<LittleEndian>(1)?;
-                    node_cur.write_i64::<LittleEndian>(n.integer().unwrap())?;
-                },
-                nx::Type::Float => {
-                    node_cur.write_u16::<LittleEndian>(2)?;
-                    node_cur.write_f64::<LittleEndian>(n.float().unwrap())?;
-                },
-                nx::Type::String => {
-                    node_cur.write_u16::<LittleEndian>(3)?;
-                    node_cur.write_u32::<LittleEndian>(string_id)?;
-                    node_cur.write_all(&[0u8; 4])?;
+            if let Some(nv) = modified.and_then(|cn| cn.val()) {
+                match nv {
+                    NodeValue::Empty => {
+                        node_cur.write_all(&[0u8; 10])?;
+                    },
+                    NodeValue::Int(i) => {
+                        node_cur.write_u16::<LittleEndian>(1)?;
+                        node_cur.write_i64::<LittleEndian>(*i)?;
+                    },
+                    NodeValue::Float(f) => {
+                        node_cur.write_u16::<LittleEndian>(2)?;
+                        node_cur.write_f64::<LittleEndian>(*f)?;
+                    },
+                    NodeValue::Str(s) => {
+                        node_cur.write_u16::<LittleEndian>(3)?;
+                        node_cur.write_u32::<LittleEndian>(string_id)?;
+                        node_cur.write_all(&[0u8; 4])?;
 
-                    strings.push(n.string().unwrap());
-                    string_id += 1;
-                },
-                nx::Type::Vector => {
-                    node_cur.write_u16::<LittleEndian>(4)?;
-                    let (x, y) = n.vector().unwrap();
-                    node_cur.write_i32::<LittleEndian>(x)?;
-                    node_cur.write_i32::<LittleEndian>(y)?;
-                },
-                nx::Type::Bitmap => {
-                    node_cur.write_u16::<LittleEndian>(5)?;
-                    node_cur.write_u32::<LittleEndian>(bitmap_id)?;
-                    let bm = n.bitmap().unwrap();
-                    node_cur.write_u16::<LittleEndian>(bm.width())?;
-                    node_cur.write_u16::<LittleEndian>(bm.height())?;
+                        strings.push(s.as_str());
+                        string_id += 1;
+                    },
+                    NodeValue::Vector(x, y) => {
+                        node_cur.write_u16::<LittleEndian>(4)?;
+                        node_cur.write_i32::<LittleEndian>(*x)?;
+                        node_cur.write_i32::<LittleEndian>(*y)?;
+                    },
+                    NodeValue::Img(i) => {
+                        node_cur.write_u16::<LittleEndian>(5)?;
+                        node_cur.write_u32::<LittleEndian>(bitmap_id)?;
+                        node_cur
+                            .write_u16::<LittleEndian>(i.get_width() as u16)?;
+                        node_cur
+                            .write_u16::<LittleEndian>(i.get_height() as u16)?;
 
-                    bitmaps.push(bm);
-                    bitmap_id += 1;
-                },
-                nx::Type::Audio => {
-                    node_cur.write_u16::<LittleEndian>(6)?;
-                    node_cur.write_u32::<LittleEndian>(audio_id)?;
-                    let a = n.audio().unwrap();
-                    node_cur.write_u32::<LittleEndian>(a.data().len() as u32)?;
+                        bitmaps.push(Image::compress_pixbuf(i)?);
+                        bitmap_id += 1;
+                    },
+                    NodeValue::Audio(_) => unimplemented!(),
+                }
+            } else {
+                match n.dtype() {
+                    nx::Type::Empty => {
+                        node_cur.write_all(&[0u8; 10])?;
+                    },
+                    nx::Type::Integer => {
+                        node_cur.write_u16::<LittleEndian>(1)?;
+                        node_cur
+                            .write_i64::<LittleEndian>(n.integer().unwrap())?;
+                    },
+                    nx::Type::Float => {
+                        node_cur.write_u16::<LittleEndian>(2)?;
+                        node_cur
+                            .write_f64::<LittleEndian>(n.float().unwrap())?;
+                    },
+                    nx::Type::String => {
+                        node_cur.write_u16::<LittleEndian>(3)?;
+                        node_cur.write_u32::<LittleEndian>(string_id)?;
+                        node_cur.write_all(&[0u8; 4])?;
 
-                    audios.push(a);
-                    audio_id += 1;
-                },
-            };
+                        strings.push(n.string().unwrap());
+                        string_id += 1;
+                    },
+                    nx::Type::Vector => {
+                        node_cur.write_u16::<LittleEndian>(4)?;
+                        let (x, y) = n.vector().unwrap();
+                        node_cur.write_i32::<LittleEndian>(x)?;
+                        node_cur.write_i32::<LittleEndian>(y)?;
+                    },
+                    nx::Type::Bitmap => {
+                        node_cur.write_u16::<LittleEndian>(5)?;
+                        node_cur.write_u32::<LittleEndian>(bitmap_id)?;
+                        let bm = n.bitmap().unwrap();
+                        node_cur.write_u16::<LittleEndian>(bm.width())?;
+                        node_cur.write_u16::<LittleEndian>(bm.height())?;
+
+                        bitmaps.push(Image::NxBitmap(bm));
+                        bitmap_id += 1;
+                    },
+                    nx::Type::Audio => {
+                        node_cur.write_u16::<LittleEndian>(6)?;
+                        node_cur.write_u32::<LittleEndian>(audio_id)?;
+                        let a = n.audio().unwrap();
+                        node_cur
+                            .write_u32::<LittleEndian>(a.data().len() as u32)?;
+
+                        audios.push(a);
+                        audio_id += 1;
+                    },
+                }
+            }
 
             out.write_all(&node_buf)?;
             offset += 20;
             node_count += 1;
         }
-        for n in breadth_iter {
+        for (n, p) in breadth_iter {
+            let modified = self.diff.modifications.get(&p);
+            if modified.map(|cn| cn.deleted).unwrap_or(false) {
+                continue;
+            }
+
             let mut node_buf = [0u8; 20];
             let mut node_cur = Cursor::new(node_buf.as_mut());
 
-            let name = n.name();
+            let name = modified
+                .and_then(|cn| cn.name())
+                .map(|name| name.as_str())
+                .unwrap_or_else(|| n.name());
             let mapped_string_id =
                 string_id_map.entry(name).or_insert_with(|| {
-                    let s_id = string_id;
                     strings.push(name);
+                    let s_id = string_id;
                     string_id += 1;
                     s_id
                 });
@@ -985,52 +1034,96 @@ impl OpenFile {
             node_cur.write_u16::<LittleEndian>(child_count as u16)?;
 
             // Data
-            match n.dtype() {
-                nx::Type::Empty => {
-                    node_cur.write_all(&[0u8; 10])?;
-                },
-                nx::Type::Integer => {
-                    node_cur.write_u16::<LittleEndian>(1)?;
-                    node_cur.write_i64::<LittleEndian>(n.integer().unwrap())?;
-                },
-                nx::Type::Float => {
-                    node_cur.write_u16::<LittleEndian>(2)?;
-                    node_cur.write_f64::<LittleEndian>(n.float().unwrap())?;
-                },
-                nx::Type::String => {
-                    node_cur.write_u16::<LittleEndian>(3)?;
-                    node_cur.write_u32::<LittleEndian>(string_id)?;
-                    node_cur.write_all(&[0u8; 4])?;
+            if let Some(nv) = modified.and_then(|cn| cn.val()) {
+                match nv {
+                    NodeValue::Empty => {
+                        node_cur.write_all(&[0u8; 10])?;
+                    },
+                    NodeValue::Int(i) => {
+                        node_cur.write_u16::<LittleEndian>(1)?;
+                        node_cur.write_i64::<LittleEndian>(*i)?;
+                    },
+                    NodeValue::Float(f) => {
+                        node_cur.write_u16::<LittleEndian>(2)?;
+                        node_cur.write_f64::<LittleEndian>(*f)?;
+                    },
+                    NodeValue::Str(s) => {
+                        node_cur.write_u16::<LittleEndian>(3)?;
+                        node_cur.write_u32::<LittleEndian>(string_id)?;
+                        node_cur.write_all(&[0u8; 4])?;
 
-                    strings.push(n.string().unwrap());
-                    string_id += 1;
-                },
-                nx::Type::Vector => {
-                    node_cur.write_u16::<LittleEndian>(4)?;
-                    let (x, y) = n.vector().unwrap();
-                    node_cur.write_i32::<LittleEndian>(x)?;
-                    node_cur.write_i32::<LittleEndian>(y)?;
-                },
-                nx::Type::Bitmap => {
-                    node_cur.write_u16::<LittleEndian>(5)?;
-                    node_cur.write_u32::<LittleEndian>(bitmap_id)?;
-                    let bm = n.bitmap().unwrap();
-                    node_cur.write_u16::<LittleEndian>(bm.width())?;
-                    node_cur.write_u16::<LittleEndian>(bm.height())?;
+                        strings.push(s.as_str());
+                        string_id += 1;
+                    },
+                    NodeValue::Vector(x, y) => {
+                        node_cur.write_u16::<LittleEndian>(4)?;
+                        node_cur.write_i32::<LittleEndian>(*x)?;
+                        node_cur.write_i32::<LittleEndian>(*y)?;
+                    },
+                    NodeValue::Img(i) => {
+                        node_cur.write_u16::<LittleEndian>(5)?;
+                        node_cur.write_u32::<LittleEndian>(bitmap_id)?;
+                        node_cur
+                            .write_u16::<LittleEndian>(i.get_width() as u16)?;
+                        node_cur
+                            .write_u16::<LittleEndian>(i.get_height() as u16)?;
 
-                    bitmaps.push(bm);
-                    bitmap_id += 1;
-                },
-                nx::Type::Audio => {
-                    node_cur.write_u16::<LittleEndian>(6)?;
-                    node_cur.write_u32::<LittleEndian>(audio_id)?;
-                    let a = n.audio().unwrap();
-                    node_cur.write_u32::<LittleEndian>(a.data().len() as u32)?;
+                        bitmaps.push(Image::compress_pixbuf(i)?);
+                        bitmap_id += 1;
+                    },
+                    NodeValue::Audio(_) => unimplemented!(),
+                }
+            } else {
+                match n.dtype() {
+                    nx::Type::Empty => {
+                        node_cur.write_all(&[0u8; 10])?;
+                    },
+                    nx::Type::Integer => {
+                        node_cur.write_u16::<LittleEndian>(1)?;
+                        node_cur
+                            .write_i64::<LittleEndian>(n.integer().unwrap())?;
+                    },
+                    nx::Type::Float => {
+                        node_cur.write_u16::<LittleEndian>(2)?;
+                        node_cur
+                            .write_f64::<LittleEndian>(n.float().unwrap())?;
+                    },
+                    nx::Type::String => {
+                        node_cur.write_u16::<LittleEndian>(3)?;
+                        node_cur.write_u32::<LittleEndian>(string_id)?;
+                        node_cur.write_all(&[0u8; 4])?;
 
-                    audios.push(a);
-                    audio_id += 1;
-                },
-            };
+                        strings.push(n.string().unwrap());
+                        string_id += 1;
+                    },
+                    nx::Type::Vector => {
+                        node_cur.write_u16::<LittleEndian>(4)?;
+                        let (x, y) = n.vector().unwrap();
+                        node_cur.write_i32::<LittleEndian>(x)?;
+                        node_cur.write_i32::<LittleEndian>(y)?;
+                    },
+                    nx::Type::Bitmap => {
+                        node_cur.write_u16::<LittleEndian>(5)?;
+                        node_cur.write_u32::<LittleEndian>(bitmap_id)?;
+                        let bm = n.bitmap().unwrap();
+                        node_cur.write_u16::<LittleEndian>(bm.width())?;
+                        node_cur.write_u16::<LittleEndian>(bm.height())?;
+
+                        bitmaps.push(Image::NxBitmap(bm));
+                        bitmap_id += 1;
+                    },
+                    nx::Type::Audio => {
+                        node_cur.write_u16::<LittleEndian>(6)?;
+                        node_cur.write_u32::<LittleEndian>(audio_id)?;
+                        let a = n.audio().unwrap();
+                        node_cur
+                            .write_u32::<LittleEndian>(a.data().len() as u32)?;
+
+                        audios.push(a);
+                        audio_id += 1;
+                    },
+                }
+            }
 
             out.write_all(&node_buf)?;
             offset += 20;
@@ -1252,10 +1345,12 @@ impl FileDiff {
 
         self.history.push((path, full_diff));
 
+        /*
         println!(
             "FileDiff::add_modification: {:?} | {:?}",
             self.modifications, self.history
         );
+        */
     }
 
     #[inline]
@@ -1273,6 +1368,21 @@ impl ChangedNode {
             children: Vec::new(),
             deleted:  false,
         }
+    }
+
+    #[inline]
+    pub fn name(&self) -> Option<&String> {
+        self.name.as_ref()
+    }
+
+    #[inline]
+    pub fn val(&self) -> Option<&NodeValue> {
+        self.val.as_ref()
+    }
+
+    #[inline]
+    pub fn children(&self) -> &Vec<NewNode> {
+        &self.children
     }
 
     #[inline]
@@ -1341,6 +1451,7 @@ impl ChangedNode {
 }
 
 impl NodeValue {
+    #[inline]
     pub fn get_type(&self) -> NodeType {
         match self {
             NodeValue::Empty => NodeType::Empty,
@@ -1355,6 +1466,7 @@ impl NodeValue {
 }
 
 impl NodeType {
+    #[inline]
     pub fn display_str(&self) -> &'static str {
         match self {
             NodeType::Empty => "",
@@ -1386,6 +1498,93 @@ impl fmt::Display for NodeType {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str(self.display_str())
+    }
+}
+
+impl<'a> Image<'a> {
+    pub fn compress_pixbuf(pb: &Pixbuf) -> Result<Self, Error> {
+        if pb.get_colorspace() != Colorspace::Rgb {
+            return Err(Error::ImgError(format!(
+                "expected Pixbuf with a colorspace of Rgb, instead got {:?}",
+                pb.get_colorspace()
+            )));
+        }
+        if pb.get_bits_per_sample() != 8 {
+            return Err(Error::ImgError(format!(
+                "converting Pixbufs with bits-per-sample other than 8 is not \
+                 implemented (this Pixbuf has {} bps)",
+                pb.get_bits_per_sample()
+            )));
+        }
+
+        let bytes = unsafe { pb.get_pixels() };
+
+        let bgra_buf = if pb.get_has_alpha() {
+            if bytes.len() % 4 != 0 {
+                return Err(Error::ImgError(format!(
+                    "pixbuf_bytes.len() == {}; {} % 4 != 0",
+                    bytes.len(),
+                    bytes.len(),
+                )));
+            }
+
+            let mut bgra_buf = Vec::with_capacity(bytes.len());
+            unsafe {
+                bgra_buf.set_len(bgra_buf.capacity());
+            }
+
+            let mut i = 0;
+            while i < bytes.len() {
+                bgra_buf[i] = bytes[i + 2];
+                bgra_buf[i + 1] = bytes[i + 1];
+                bgra_buf[i + 2] = bytes[i];
+                bgra_buf[i + 3] = bytes[i + 3];
+
+                i += 4;
+            }
+
+            bgra_buf
+        } else {
+            if bytes.len() % 3 != 0 {
+                return Err(Error::ImgError(format!(
+                    "pixbuf_bytes.len() == {}; {} % 3 != 0",
+                    bytes.len(),
+                    bytes.len(),
+                )));
+            }
+
+            let mut bgra_buf = Vec::with_capacity(bytes.len() / 3 * 4);
+            unsafe {
+                bgra_buf.set_len(bgra_buf.capacity());
+            }
+
+            let (mut i, mut j) = (0, 0);
+            while i < bytes.len() {
+                bgra_buf[j] = bytes[i + 2];
+                bgra_buf[j + 1] = bytes[i + 1];
+                bgra_buf[j + 2] = bytes[i];
+                bgra_buf[j + 3] = 0xFF;
+
+                i += 3;
+                j += 4;
+            }
+
+            bgra_buf
+        };
+
+        let mut compressed = Vec::with_capacity(bgra_buf.len());
+
+        compress_buf(&bgra_buf, &mut compressed)?;
+        Ok(Image::Compressed(compressed))
+    }
+
+    /// LZ4-compressed BGRA8888 data.
+    #[inline]
+    pub fn raw_data(&self) -> &[u8] {
+        match self {
+            Image::NxBitmap(bm) => bm.raw_data(),
+            Image::Compressed(c) => c,
+        }
     }
 }
 
@@ -1757,6 +1956,7 @@ pub fn append_text_column(
     tree.append_column(&column);
 }
 
+#[inline]
 pub fn append_pixbuf_column(tree: &gtk::TreeView, col_ix: i32) {
     let column = gtk::TreeViewColumn::new();
     let cell = gtk::CellRendererPixbuf::new();

@@ -26,6 +26,7 @@ use gtk::prelude::*;
 use std::env::args;
 use ui::App;
 
+#[inline]
 fn started(application: &gtk::Application) -> Result<(), Error> {
     let app = App::new(application)?;
     app.window.gtk_window.show_all();

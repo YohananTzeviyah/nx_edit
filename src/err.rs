@@ -15,6 +15,7 @@ pub enum Error {
     Io(std::io::Error),
     Path(String),
     IntoInner(String),
+    ImgError(String),
 }
 
 impl fmt::Display for Error {
@@ -51,6 +52,10 @@ impl fmt::Display for Error {
             Error::IntoInner(ii) => {
                 f.write_str("[intoinner error] ")?;
                 f.write_str(ii)
+            },
+            Error::ImgError(ie) => {
+                f.write_str("[img error] ")?;
+                f.write_str(ie)
             },
         }
     }

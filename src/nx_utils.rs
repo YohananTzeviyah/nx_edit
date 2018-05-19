@@ -8,6 +8,7 @@ pub struct NxBreadthIter<'a> {
 }
 
 impl<'a> NxBreadthIter<'a> {
+    #[inline]
     pub fn new(root: &nx::Node<'a>) -> Self {
         let mut queue = VecDeque::with_capacity(12);
         queue.push_back(root.iter());
@@ -19,6 +20,7 @@ impl<'a> NxBreadthIter<'a> {
 impl<'a> Iterator for NxBreadthIter<'a> {
     type Item = nx::Node<'a>;
 
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         while let Some(f) = self.queue.front_mut() {
             if let Some(n) = f.next() {
@@ -43,6 +45,7 @@ pub struct NxBreadthPathIter<'a> {
 }
 
 impl<'a> NxBreadthPathIter<'a> {
+    #[inline]
     pub fn new(root: &nx::Node<'a>) -> Self {
         let mut queue = VecDeque::with_capacity(12);
         let mut p = Vec::with_capacity(12);
@@ -56,12 +59,14 @@ impl<'a> NxBreadthPathIter<'a> {
 impl<'a> Iterator for NxBreadthPathIter<'a> {
     type Item = (nx::Node<'a>, Vec<i32>);
 
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         while let Some((iter, path)) = self.queue.front_mut() {
             if let Some(n) = iter.next() {
                 let mut n_path = path.clone();
                 n_path.push(self.curr_lvl);
                 self.curr_lvl += 1;
+
                 if n.child_count() > 0 {
                     self.queue.push_back((n.iter(), n_path.clone()));
                 }
@@ -84,6 +89,7 @@ pub struct NxDepthIter<'a> {
 }
 
 impl<'a> NxDepthIter<'a> {
+    #[inline]
     pub fn new(root: &nx::Node<'a>) -> Self {
         let mut stack = Vec::with_capacity(12);
         stack.push(root.iter());
@@ -95,6 +101,7 @@ impl<'a> NxDepthIter<'a> {
 impl<'a> Iterator for NxDepthIter<'a> {
     type Item = nx::Node<'a>;
 
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         while let Some(d) = self.stack.last_mut() {
             if let Some(n) = d.next() {
