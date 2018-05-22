@@ -198,6 +198,9 @@ impl OpenFiles {
             let of = Arc::clone(&of);
             let icons = Arc::clone(&self.icons);
             tree_view.connect_test_expand_row(move |tv, titer, tpath| {
+                #[cfg(debug_assertions)]
+                println!("tree_view.connect_test_expand_row");
+
                 let model_store: gtk::TreeStore = tv
                     .get_model()
                     .clone()
@@ -288,6 +291,9 @@ impl OpenFiles {
         }
 
         tree_view.connect_test_collapse_row(|tv, titer, _| {
+            #[cfg(debug_assertions)]
+            println!("tree_view.connect_test_collapse_row");
+
             let model_store: gtk::TreeStore = tv
                 .get_model()
                 .clone()
@@ -329,6 +335,11 @@ impl OpenFiles {
                 .get_buffer()
                 .unwrap()
                 .connect_changed(move |_| {
+                    #[cfg(debug_assertions)]
+                    println!(
+                        "view_struct.node_view.name_display.connect_changed"
+                    );
+
                     of.lock().unwrap().name_buffer_dirty = true;
                 });
         }
@@ -341,6 +352,9 @@ impl OpenFiles {
             let view = Arc::clone(&view);
             let of = Arc::clone(&of);
             tree_view.connect_cursor_changed(move |tv| {
+                #[cfg(debug_assertions)]
+                println!("tree_view.connect_cursor_changed");
+
                 let path = if let (Some(p), _) = tv.get_cursor() {
                     p
                 } else {
@@ -387,6 +401,12 @@ impl OpenFiles {
                                 .get_buffer()
                                 .unwrap()
                                 .connect_changed(move |_| {
+                                    #[cfg(debug_assertions)]
+                                    println!(
+                                        "new_text_view.get_buffer().unwrap().\
+                                         connect_changed"
+                                    );
+
                                     if let Ok(mut of) = of.try_lock() {
                                         of.val_buffer_dirty = true;
                                     }
@@ -412,6 +432,9 @@ impl OpenFiles {
             let of = Arc::clone(of);
             let w = window.clone();
             v.node_view.buttons.record_button.connect_clicked(move |_| {
+                #[cfg(debug_assertions)]
+                println!("v.node_view.buttons.record_button.connect_clicked");
+
                 let v = view.lock().unwrap();
                 let mut of = of.lock().unwrap();
 
@@ -608,6 +631,11 @@ impl OpenFiles {
                 .buttons
                 .insert_button
                 .connect_clicked(move |button| {
+                    #[cfg(debug_assertions)]
+                    println!(
+                        "v.node_view.buttons.insert_button.connect_clicked"
+                    );
+
                     let v = view.lock().unwrap();
 
                     v.node_view.buttons.insert_menu.menu.show_all();
@@ -626,6 +654,15 @@ impl OpenFiles {
                      // another level of indentation.
 
         c.add_view(view);
+    }
+
+    pub fn close_file(&mut self, index: usize) -> bool {
+        if index < self.files.len() {
+            self.files.remove(index);
+            true
+        } else {
+            false
+        }
     }
 
     #[inline]

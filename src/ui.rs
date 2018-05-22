@@ -114,6 +114,9 @@ impl Window {
         {
             let w = gtk_window.clone();
             gtk_window.connect_delete_event(move |_, _| {
+                #[cfg(debug_assertions)]
+                println!("gtk_window.connect_delete_event");
+
                 w.destroy();
                 Inhibit(false)
             });
@@ -130,16 +133,21 @@ impl Window {
             let w = gtk_window.clone();
             let c = Arc::clone(&content);
             toolbar.open_button.connect_clicked(move |_| {
+                #[cfg(debug_assertions)]
+                println!("toolbar.open_button.connect_clicked");
+
                 let mut state = s.lock().unwrap();
                 let window_width = state.window_width;
                 // TODO: Figure out some kind of error handling, maybe
                 // involving storing errors in `AppState`.
-                let (nx_file, filename) =
-                    if let Some(nf) = open_file(&w).unwrap() {
-                        nf
-                    } else {
+                let (nx_file, filename) = match open_file(&w) {
+                    Ok(Some(nf)) => nf,
+                    Ok(_) => return,
+                    Err(e) => {
+                        eprintln!("{}", e);
                         return;
-                    };
+                    },
+                };
 
                 state.open_files.new_file(
                     nx_file,
@@ -151,24 +159,60 @@ impl Window {
             });
         }
         {
+            let s = Arc::clone(&state);
+            let c = Arc::clone(&content);
+            toolbar.close_button.connect_clicked(move |_| {
+                #[cfg(debug_assertions)]
+                println!("toolbar.close_button.connect_clicked");
+
+                let c = c.lock().unwrap();
+                let current_file =
+                    if let Some(cf) = c.notebook().get_current_page() {
+                        cf
+                    } else {
+                        return;
+                    };
+                c.notebook().remove_page(Some(current_file));
+
+                s.lock()
+                    .unwrap()
+                    .open_files
+                    .close_file(current_file as usize);
+            });
+        }
+        {
             let s = Arc::clone(state);
             let w = gtk_window.clone();
+            let c = Arc::clone(&content);
             toolbar.save_as_button.connect_clicked(move |_| {
-                if let Err(e) = s
+                #[cfg(debug_assertions)]
+                println!("toolbar.save_as_button.connect_clicked");
+
+                let c = c.lock().unwrap();
+                let current_file =
+                    if let Some(cf) = c.notebook().get_current_page() {
+                        cf
+                    } else {
+                        return;
+                    };
+
+                if let Some(err) = s
                     .lock()
                     .unwrap()
                     .open_files
-                    .get_file(0)
-                    .unwrap()
-                    .write_to_file(&w)
+                    .get_file(current_file as usize)
+                    .and_then(|of| of.write_to_file(&w).err())
                 {
-                    eprintln!("{}", e);
+                    eprintln!("{}", err);
                 }
             });
         }
         {
             let w = gtk_window.clone();
             toolbar.about_button.connect_clicked(move |_| {
+                #[cfg(debug_assertions)]
+                println!("toolbar.about_button.connect_clicked");
+
                 if let Err(e) = run_about_dialog(&w) {
                     eprintln!("{}", e);
                 }
@@ -180,6 +224,9 @@ impl Window {
             let c = Arc::clone(&content);
             let s = Arc::clone(&state);
             gtk_window.connect_configure_event(move |_, event| {
+                #[cfg(debug_assertions)]
+                println!("gtk_window.connect_configure_event");
+
                 let mut s = s.lock().unwrap();
 
                 let (new_width, _) = event.get_size();
