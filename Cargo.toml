@@ -21,11 +21,15 @@ lz4 = "*"
 nx = { path = "./nx-rs" }
 pango = "*"
 
+simplemad = "*"
+vorbis = "*"
+
 [features]
 default = []
+mp3_to_vorbis = []
 
 [profile.release]
-lto = true
+lto = "fat"
 panic = "abort"
 opt-level = 3
 debug = false

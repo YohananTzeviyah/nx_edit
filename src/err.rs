@@ -1,6 +1,8 @@
 use gdk_pixbuf;
 use nx;
+use simplemad;
 use std::{self, fmt, num};
+use vorbis;
 
 #[derive(Debug)]
 pub enum Error {
@@ -16,6 +18,8 @@ pub enum Error {
     Path(String),
     IntoInner(String),
     ImgError(String),
+    Mad(simplemad::SimplemadError),
+    Vorbis(vorbis::VorbisError),
 }
 
 impl fmt::Display for Error {
@@ -57,6 +61,8 @@ impl fmt::Display for Error {
                 f.write_str("[img error] ")?;
                 f.write_str(ie)
             },
+            Error::Mad(me) => write!(f, "[simplemad error] {:?}", me),
+            Error::Vorbis(ve) => write!(f, "[vorbis error] {}", ve),
         }
     }
 }
@@ -102,5 +108,19 @@ impl<W> From<std::io::IntoInnerError<W>> for Error {
     #[inline]
     fn from(iierr: std::io::IntoInnerError<W>) -> Self {
         Error::IntoInner(iierr.error().to_string())
+    }
+}
+
+impl From<simplemad::SimplemadError> for Error {
+    #[inline]
+    fn from(maderr: simplemad::SimplemadError) -> Self {
+        Error::Mad(maderr)
+    }
+}
+
+impl From<vorbis::VorbisError> for Error {
+    #[inline]
+    fn from(verr: vorbis::VorbisError) -> Self {
+        Error::Vorbis(verr)
     }
 }

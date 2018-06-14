@@ -147,6 +147,12 @@ impl OpenFiles {
         window: &gtk::ApplicationWindow,
         window_width: u32,
     ) {
+        println!(
+            "new_file: {:?}, audio count = {}",
+            filename.as_ref(),
+            nf.audio_count()
+        );
+
         self.files
             .push(Arc::new(Mutex::new(OpenFile::new(nf, None))));
         let of = self.files.last().unwrap();
@@ -780,7 +786,7 @@ impl OpenFile {
                 self.diff.add_modification(
                     path,
                     ForwardNodeDiff::ValueChange(NodeValue::Int(
-                        trimmed.parse()?
+                        trimmed.parse()?,
                     )),
                 );
                 if trimmed != string {
@@ -792,7 +798,7 @@ impl OpenFile {
                 self.diff.add_modification(
                     path,
                     ForwardNodeDiff::ValueChange(NodeValue::Float(
-                        trimmed.parse()?
+                        trimmed.parse()?,
                     )),
                 );
                 if trimmed != string {
@@ -863,7 +869,7 @@ impl OpenFile {
 
                     let mut f = File::create(&path)?;
                     let mut f_buf =
-                        BufWriter::with_capacity(64 * 1024, &mut f);
+                        BufWriter::with_capacity(64 * 1024 * 1024, &mut f);
                     self.write(&mut f_buf)?;
                     f_buf.into_inner()?.sync_all()?;
 
@@ -912,6 +918,13 @@ impl OpenFile {
             Vec::with_capacity(self.nx_file.bitmap_count() as usize);
         let mut audios =
             Vec::with_capacity(self.nx_file.audio_count() as usize);
+        let mut audio_index_id_map = HashMap::with_capacity_and_hasher(
+            self.nx_file.audio_count() as usize,
+            FxBuildHasher::default(),
+        );
+
+        #[cfg(feature = "mp3_to_vorbis")]
+        let mut audio_header = None;
 
         let breadth_iter = NxBreadthPathIter::new(&orig_root);
         let mut child_id = 1u32;
@@ -930,9 +943,6 @@ impl OpenFile {
                 continue;
             }
 
-            let mut node_buf = [0u8; 20];
-            let mut node_cur = Cursor::new(node_buf.as_mut());
-
             let name = modified
                 .and_then(|cn| cn.name())
                 .map(|name| name.as_str())
@@ -944,49 +954,47 @@ impl OpenFile {
                     string_id += 1;
                     s_id
                 });
-            node_cur.write_u32::<LittleEndian>(*mapped_string_id)?; // Name
+            out.write_u32::<LittleEndian>(*mapped_string_id)?; // Name
 
-            node_cur.write_u32::<LittleEndian>(child_id)?; // First child ID
+            out.write_u32::<LittleEndian>(child_id)?; // First child ID
 
             let child_count = n.iter().count();
             child_id += child_count as u32;
             // Child count
-            node_cur.write_u16::<LittleEndian>(child_count as u16)?;
+            out.write_u16::<LittleEndian>(child_count as u16)?;
 
             // Data
             if let Some(nv) = modified.and_then(|cn| cn.val()) {
                 match nv {
                     NodeValue::Empty => {
-                        node_cur.write_all(&[0u8; 10])?;
+                        out.write_all(&[0u8; 10])?;
                     },
                     NodeValue::Int(i) => {
-                        node_cur.write_u16::<LittleEndian>(1)?;
-                        node_cur.write_i64::<LittleEndian>(*i)?;
+                        out.write_u16::<LittleEndian>(1)?;
+                        out.write_i64::<LittleEndian>(*i)?;
                     },
                     NodeValue::Float(f) => {
-                        node_cur.write_u16::<LittleEndian>(2)?;
-                        node_cur.write_f64::<LittleEndian>(*f)?;
+                        out.write_u16::<LittleEndian>(2)?;
+                        out.write_f64::<LittleEndian>(*f)?;
                     },
                     NodeValue::Str(s) => {
-                        node_cur.write_u16::<LittleEndian>(3)?;
-                        node_cur.write_u32::<LittleEndian>(string_id)?;
-                        node_cur.write_all(&[0u8; 4])?;
+                        out.write_u16::<LittleEndian>(3)?;
+                        out.write_u32::<LittleEndian>(string_id)?;
+                        out.write_all(&[0u8; 4])?;
 
                         strings.push(s.as_str());
                         string_id += 1;
                     },
                     NodeValue::Vector(x, y) => {
-                        node_cur.write_u16::<LittleEndian>(4)?;
-                        node_cur.write_i32::<LittleEndian>(*x)?;
-                        node_cur.write_i32::<LittleEndian>(*y)?;
+                        out.write_u16::<LittleEndian>(4)?;
+                        out.write_i32::<LittleEndian>(*x)?;
+                        out.write_i32::<LittleEndian>(*y)?;
                     },
                     NodeValue::Img(i) => {
-                        node_cur.write_u16::<LittleEndian>(5)?;
-                        node_cur.write_u32::<LittleEndian>(bitmap_id)?;
-                        node_cur
-                            .write_u16::<LittleEndian>(i.get_width() as u16)?;
-                        node_cur
-                            .write_u16::<LittleEndian>(i.get_height() as u16)?;
+                        out.write_u16::<LittleEndian>(5)?;
+                        out.write_u32::<LittleEndian>(bitmap_id)?;
+                        out.write_u16::<LittleEndian>(i.get_width() as u16)?;
+                        out.write_u16::<LittleEndian>(i.get_height() as u16)?;
 
                         bitmaps.push(Image::compress_pixbuf(i)?);
                         bitmap_id += 1;
@@ -996,56 +1004,72 @@ impl OpenFile {
             } else {
                 match n.dtype() {
                     nx::Type::Empty => {
-                        node_cur.write_all(&[0u8; 10])?;
+                        out.write_all(&[0u8; 10])?;
                     },
                     nx::Type::Integer => {
-                        node_cur.write_u16::<LittleEndian>(1)?;
-                        node_cur
-                            .write_i64::<LittleEndian>(n.integer().unwrap())?;
+                        out.write_u16::<LittleEndian>(1)?;
+                        out.write_i64::<LittleEndian>(n.integer().unwrap())?;
                     },
                     nx::Type::Float => {
-                        node_cur.write_u16::<LittleEndian>(2)?;
-                        node_cur
-                            .write_f64::<LittleEndian>(n.float().unwrap())?;
+                        out.write_u16::<LittleEndian>(2)?;
+                        out.write_f64::<LittleEndian>(n.float().unwrap())?;
                     },
                     nx::Type::String => {
-                        node_cur.write_u16::<LittleEndian>(3)?;
-                        node_cur.write_u32::<LittleEndian>(string_id)?;
-                        node_cur.write_all(&[0u8; 4])?;
+                        out.write_u16::<LittleEndian>(3)?;
+                        out.write_u32::<LittleEndian>(string_id)?;
+                        out.write_all(&[0u8; 4])?;
 
                         strings.push(n.string().unwrap());
                         string_id += 1;
                     },
                     nx::Type::Vector => {
-                        node_cur.write_u16::<LittleEndian>(4)?;
+                        out.write_u16::<LittleEndian>(4)?;
                         let (x, y) = n.vector().unwrap();
-                        node_cur.write_i32::<LittleEndian>(x)?;
-                        node_cur.write_i32::<LittleEndian>(y)?;
+                        out.write_i32::<LittleEndian>(x)?;
+                        out.write_i32::<LittleEndian>(y)?;
                     },
                     nx::Type::Bitmap => {
-                        node_cur.write_u16::<LittleEndian>(5)?;
-                        node_cur.write_u32::<LittleEndian>(bitmap_id)?;
+                        out.write_u16::<LittleEndian>(5)?;
+                        out.write_u32::<LittleEndian>(bitmap_id)?;
                         let bm = n.bitmap().unwrap();
-                        node_cur.write_u16::<LittleEndian>(bm.width())?;
-                        node_cur.write_u16::<LittleEndian>(bm.height())?;
+                        out.write_u16::<LittleEndian>(bm.width())?;
+                        out.write_u16::<LittleEndian>(bm.height())?;
 
                         bitmaps.push(Image::NxBitmap(bm));
                         bitmap_id += 1;
                     },
                     nx::Type::Audio => {
-                        node_cur.write_u16::<LittleEndian>(6)?;
-                        node_cur.write_u32::<LittleEndian>(audio_id)?;
+                        out.write_u16::<LittleEndian>(6)?;
+                        out.write_u32::<LittleEndian>(audio_id)?;
                         let a = n.audio().unwrap();
-                        node_cur
-                            .write_u32::<LittleEndian>(a.data().len() as u32)?;
 
-                        audios.push(a);
+                        #[cfg(feature = "mp3_to_vorbis")]
+                        {
+                            if audio_header.is_none() {
+                                audio_header = Some(a.header().to_vec());
+                            }
+
+                            let vorbis_data = ::audio::mp3_to_vorbis(
+                                a.data(),
+                                a.data().len() * 3 / 2,
+                            )?;
+
+                            audios.push(vorbis_data);
+                        }
+                        #[cfg(not(feature = "mp3_to_vorbis"))]
+                        {
+                            out.write_u32::<LittleEndian>(
+                                a.data().len() as u32
+                            )?;
+
+                            audios.push(a);
+                        }
+
                         audio_id += 1;
                     },
                 }
             }
 
-            out.write_all(&node_buf)?;
             offset += 20;
             node_count += 1;
         }
@@ -1055,9 +1079,6 @@ impl OpenFile {
                 continue;
             }
 
-            let mut node_buf = [0u8; 20];
-            let mut node_cur = Cursor::new(node_buf.as_mut());
-
             let name = modified
                 .and_then(|cn| cn.name())
                 .map(|name| name.as_str())
@@ -1069,49 +1090,47 @@ impl OpenFile {
                     string_id += 1;
                     s_id
                 });
-            node_cur.write_u32::<LittleEndian>(*mapped_string_id)?; // Name
+            out.write_u32::<LittleEndian>(*mapped_string_id)?; // Name
 
-            node_cur.write_u32::<LittleEndian>(child_id)?; // First child ID
+            out.write_u32::<LittleEndian>(child_id)?; // First child ID
 
             let child_count = n.iter().count();
             child_id += child_count as u32;
             // Child count
-            node_cur.write_u16::<LittleEndian>(child_count as u16)?;
+            out.write_u16::<LittleEndian>(child_count as u16)?;
 
             // Data
             if let Some(nv) = modified.and_then(|cn| cn.val()) {
                 match nv {
                     NodeValue::Empty => {
-                        node_cur.write_all(&[0u8; 10])?;
+                        out.write_all(&[0u8; 10])?;
                     },
                     NodeValue::Int(i) => {
-                        node_cur.write_u16::<LittleEndian>(1)?;
-                        node_cur.write_i64::<LittleEndian>(*i)?;
+                        out.write_u16::<LittleEndian>(1)?;
+                        out.write_i64::<LittleEndian>(*i)?;
                     },
                     NodeValue::Float(f) => {
-                        node_cur.write_u16::<LittleEndian>(2)?;
-                        node_cur.write_f64::<LittleEndian>(*f)?;
+                        out.write_u16::<LittleEndian>(2)?;
+                        out.write_f64::<LittleEndian>(*f)?;
                     },
                     NodeValue::Str(s) => {
-                        node_cur.write_u16::<LittleEndian>(3)?;
-                        node_cur.write_u32::<LittleEndian>(string_id)?;
-                        node_cur.write_all(&[0u8; 4])?;
+                        out.write_u16::<LittleEndian>(3)?;
+                        out.write_u32::<LittleEndian>(string_id)?;
+                        out.write_all(&[0u8; 4])?;
 
                         strings.push(s.as_str());
                         string_id += 1;
                     },
                     NodeValue::Vector(x, y) => {
-                        node_cur.write_u16::<LittleEndian>(4)?;
-                        node_cur.write_i32::<LittleEndian>(*x)?;
-                        node_cur.write_i32::<LittleEndian>(*y)?;
+                        out.write_u16::<LittleEndian>(4)?;
+                        out.write_i32::<LittleEndian>(*x)?;
+                        out.write_i32::<LittleEndian>(*y)?;
                     },
                     NodeValue::Img(i) => {
-                        node_cur.write_u16::<LittleEndian>(5)?;
-                        node_cur.write_u32::<LittleEndian>(bitmap_id)?;
-                        node_cur
-                            .write_u16::<LittleEndian>(i.get_width() as u16)?;
-                        node_cur
-                            .write_u16::<LittleEndian>(i.get_height() as u16)?;
+                        out.write_u16::<LittleEndian>(5)?;
+                        out.write_u32::<LittleEndian>(bitmap_id)?;
+                        out.write_u16::<LittleEndian>(i.get_width() as u16)?;
+                        out.write_u16::<LittleEndian>(i.get_height() as u16)?;
 
                         bitmaps.push(Image::compress_pixbuf(i)?);
                         bitmap_id += 1;
@@ -1121,56 +1140,80 @@ impl OpenFile {
             } else {
                 match n.dtype() {
                     nx::Type::Empty => {
-                        node_cur.write_all(&[0u8; 10])?;
+                        out.write_all(&[0u8; 10])?;
                     },
                     nx::Type::Integer => {
-                        node_cur.write_u16::<LittleEndian>(1)?;
-                        node_cur
-                            .write_i64::<LittleEndian>(n.integer().unwrap())?;
+                        out.write_u16::<LittleEndian>(1)?;
+                        out.write_i64::<LittleEndian>(n.integer().unwrap())?;
                     },
                     nx::Type::Float => {
-                        node_cur.write_u16::<LittleEndian>(2)?;
-                        node_cur
-                            .write_f64::<LittleEndian>(n.float().unwrap())?;
+                        out.write_u16::<LittleEndian>(2)?;
+                        out.write_f64::<LittleEndian>(n.float().unwrap())?;
                     },
                     nx::Type::String => {
-                        node_cur.write_u16::<LittleEndian>(3)?;
-                        node_cur.write_u32::<LittleEndian>(string_id)?;
-                        node_cur.write_all(&[0u8; 4])?;
+                        out.write_u16::<LittleEndian>(3)?;
+                        out.write_u32::<LittleEndian>(string_id)?;
+                        out.write_all(&[0u8; 4])?;
 
                         strings.push(n.string().unwrap());
                         string_id += 1;
                     },
                     nx::Type::Vector => {
-                        node_cur.write_u16::<LittleEndian>(4)?;
+                        out.write_u16::<LittleEndian>(4)?;
                         let (x, y) = n.vector().unwrap();
-                        node_cur.write_i32::<LittleEndian>(x)?;
-                        node_cur.write_i32::<LittleEndian>(y)?;
+                        out.write_i32::<LittleEndian>(x)?;
+                        out.write_i32::<LittleEndian>(y)?;
                     },
                     nx::Type::Bitmap => {
-                        node_cur.write_u16::<LittleEndian>(5)?;
-                        node_cur.write_u32::<LittleEndian>(bitmap_id)?;
+                        out.write_u16::<LittleEndian>(5)?;
+                        out.write_u32::<LittleEndian>(bitmap_id)?;
                         let bm = n.bitmap().unwrap();
-                        node_cur.write_u16::<LittleEndian>(bm.width())?;
-                        node_cur.write_u16::<LittleEndian>(bm.height())?;
+                        out.write_u16::<LittleEndian>(bm.width())?;
+                        out.write_u16::<LittleEndian>(bm.height())?;
 
                         bitmaps.push(Image::NxBitmap(bm));
                         bitmap_id += 1;
                     },
                     nx::Type::Audio => {
-                        node_cur.write_u16::<LittleEndian>(6)?;
-                        node_cur.write_u32::<LittleEndian>(audio_id)?;
+                        out.write_u16::<LittleEndian>(6)?;
+                        out.write_u32::<LittleEndian>(audio_id)?;
                         let a = n.audio().unwrap();
-                        node_cur
-                            .write_u32::<LittleEndian>(a.data().len() as u32)?;
 
-                        audios.push(a);
+                        #[cfg(feature = "mp3_to_vorbis")]
+                        {
+                            if audio_header.is_none() {
+                                audio_header = Some(a.header().to_vec());
+                            }
+
+                            let vorbis_data = match ::audio::mp3_to_vorbis(
+                                a.data(),
+                                a.data().len() * 3 / 2,
+                            ) {
+                                Ok(v) => v,
+                                Err(_) =>
+                                    ::audio::ffmpeg_mp3_to_vorbis(a, audio_id)?,
+                            };
+
+                            out.write_u32::<LittleEndian>(
+                                vorbis_data.len() as u32 + 82,
+                            )?;
+
+                            audios.push(vorbis_data);
+                        }
+                        #[cfg(not(feature = "mp3_to_vorbis"))]
+                        {
+                            out.write_u32::<LittleEndian>(
+                                a.data().len() as u32 + 82,
+                            )?;
+
+                            audios.push(a);
+                        }
+
                         audio_id += 1;
                     },
                 }
             }
 
-            out.write_all(&node_buf)?;
             offset += 20;
             node_count += 1;
         }
@@ -1199,17 +1242,12 @@ impl OpenFile {
         // ================ String data ================ \\
         for s in strings {
             let s_len = s.len();
-            let mut str_buf = Vec::with_capacity(3 + s_len);
-            let mut str_cur = Cursor::new(&mut str_buf);
 
-            str_cur.write_u16::<LittleEndian>(s_len as u16)?;
-            str_cur.write_all(s.as_bytes())?;
+            out.write_u16::<LittleEndian>(s_len as u16)?;
+            out.write_all(s.as_bytes())?;
             if s_len % 2 != 0 {
-                str_cur.write_all(&[0u8])?;
+                out.write_all(&[0u8])?;
             }
-
-            debug_assert_eq!(str_buf.len() % 2, 0);
-            out.write_all(&str_buf)?;
         }
         offset = string_data_offset;
         debug_assert_eq!(offset % 2, 0);
@@ -1251,19 +1289,14 @@ impl OpenFile {
         // ================ Bitmap data ================ \\
         for bm in bitmaps {
             let bm_len = bm.raw_data().len();
-            let mut bm_buf = Vec::with_capacity(11 + bm_len);
-            let mut bm_cur = Cursor::new(&mut bm_buf);
 
-            bm_cur.write_u32::<LittleEndian>(bm_len as u32)?;
-            bm_cur.write_all(bm.raw_data())?;
+            out.write_u32::<LittleEndian>(bm_len as u32)?;
+            out.write_all(bm.raw_data())?;
             let bm_total_len = bm_len + 4;
             if bm_total_len % 8 != 0 {
                 let pad_buf = [0u8; 7];
-                bm_cur.write_all(&pad_buf[0..8 - bm_total_len % 8])?;
+                out.write_all(&pad_buf[0..8 - bm_total_len % 8])?;
             }
-
-            debug_assert_eq!(bm_buf.len() % 8, 0);
-            out.write_all(&bm_buf)?;
         }
         offset = bitmap_data_offset;
         debug_assert_eq!(offset % 8, 0);
@@ -1276,7 +1309,12 @@ impl OpenFile {
         // ================ Audio offset table ================ \\
         for a in audios.iter() {
             out.write_u64::<LittleEndian>(audio_data_offset)?;
+
+            #[cfg(feature = "mp3_to_vorbis")]
+            let a_len = 82 + a.len() as u64; // 82 bytes of WZ header.
+            #[cfg(not(feature = "mp3_to_vorbis"))]
             let a_len = 82 + a.data().len() as u64; // 82 bytes of WZ header.
+
             audio_data_offset +=
                 a_len + if a_len % 8 == 0 { 0 } else { 8 - a_len % 8 };
             debug_assert_eq!(audio_data_offset % 8, 0);
@@ -1285,13 +1323,26 @@ impl OpenFile {
 
         // ================ Audio data ================ \\
         for a in audios {
+            #[cfg(feature = "mp3_to_vorbis")]
+            let a_len = 82 + a.len();
+            #[cfg(not(feature = "mp3_to_vorbis"))]
             let a_len = 82 + a.data().len() as usize;
+
             let padding = if a_len % 8 == 0 { 0 } else { 8 - a_len % 8 };
             let mut a_buf = Vec::with_capacity(a_len + padding);
             let mut a_cur = Cursor::new(&mut a_buf);
 
-            a_cur.write_all(a.header())?;
-            a_cur.write_all(a.data())?;
+            #[cfg(feature = "mp3_to_vorbis")]
+            {
+                a_cur.write_all(audio_header.as_ref().unwrap())?;
+                a_cur.write_all(&a)?;
+            }
+            #[cfg(not(feature = "mp3_to_vorbis"))]
+            {
+                a_cur.write_all(a.header())?;
+                a_cur.write_all(a.data())?;
+            }
+
             if padding != 0 {
                 let pad_buf = [0u8; 7];
                 a_cur.write_all(&pad_buf[0..padding])?;

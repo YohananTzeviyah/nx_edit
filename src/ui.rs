@@ -440,6 +440,9 @@ impl NodeView {
 
         self.own_box.pack_start(&img, true, true, 0);
 
+        use gdk_pixbuf::PixbufExt;
+        println!("{:?}", {let pb = img.get_pixbuf().unwrap(); (pb.get_width(), pb.get_height())});
+
         self.node_display = NodeDisplay::Image(img);
         self.assoc_path = Some(path);
     }

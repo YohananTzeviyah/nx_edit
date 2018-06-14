@@ -3,6 +3,7 @@
 #![feature(exact_chunks)]
 #![feature(nll)]
 
+mod audio;
 mod compression;
 mod err;
 mod nx_utils;
@@ -19,6 +20,8 @@ extern crate gtk;
 extern crate lz4;
 extern crate nx;
 extern crate pango;
+extern crate simplemad;
+extern crate vorbis;
 
 use err::Error;
 use gio::prelude::*;
